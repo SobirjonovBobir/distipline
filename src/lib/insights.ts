@@ -4,6 +4,10 @@ import { sql } from "./db";
 
 export type InsightItem = { id: string; title: string; body: string; tone: string };
 
+/**
+ * Personalized, data-backed tips only.
+ * Generic “try X” spam is omitted when the user already has meaningful activity.
+ */
 export async function buildInsights(userId: string) {
   const today = todayIso();
   const weekFrom = addDaysIso(today, -6);
@@ -59,6 +63,7 @@ export async function buildInsights(userId: string) {
     };
   }
 
+  // Task performance — always data-backed when there are occurrences
   if ((week.percent ?? 0) >= 80 && week.total > 0) {
     insights.push({
       id: "strong-week",
@@ -89,7 +94,7 @@ export async function buildInsights(userId: string) {
       body: "Mukammal kunlar ketma-ketligi davom etmoqda. Bugunni ham 100% qiling.",
       tone: "high",
     });
-  } else if (streak === 0 && week.total > 0) {
+  } else if (streak === 0 && week.total > 0 && week.daysWithTasks >= 2) {
     insights.push({
       id: "restart-streak",
       title: "Zanjirni qayta boshlang",
@@ -98,35 +103,23 @@ export async function buildInsights(userId: string) {
     });
   }
 
-  if (focusSessions === 0) {
-    insights.push({
-      id: "try-focus",
-      title: "Focus Mode sinab ko‘ring",
-      body: "25 daqiqalik Pomodoro sessiyasi e’tiborni yig‘adi. Natija Statistika’da saqlanadi.",
-      tone: "neutral",
-    });
-  } else {
+  // Focus — only when sessions exist (no generic “try Focus”)
+  if (focusSessions > 0) {
     const mins = Math.round(focusSeconds / 60);
     insights.push({
       id: "focus-week",
       title: "Fokus vaqti",
-      body: `Bu hafta ${focusSessions} ta sessiya · ${mins} daqiqa. Baraka topgur.`,
+      body: `Bu hafta ${focusSessions} ta sessiya · ${mins} daqiqa.`,
       tone: "high",
     });
   }
 
-  if (journals === 0) {
-    insights.push({
-      id: "journal",
-      title: "Kundalik yozing",
-      body: "Bugungi kayfiyat va minnatdorchilikni qisqa yozib qo‘ying — odat mustahkamlanadi.",
-      tone: "neutral",
-    });
-  } else {
+  // Journal — only when entries exist
+  if (journals > 0) {
     insights.push({
       id: "journal-ok",
       title: "Kundalik odat",
-      body: `So‘nggi 7 kunda ${journals} ta yozuv. Davom eting — o‘zini kuzatish kuchayadi.`,
+      body: `So‘nggi 7 kunda ${journals} ta yozuv. Davom eting.`,
       tone: "high",
     });
   }
@@ -141,6 +134,7 @@ export async function buildInsights(userId: string) {
     });
   }
 
+  // Cash — only when transactions exist
   if (cashTx > 0) {
     const net = cashIncome - cashExpense;
     insights.push({
@@ -148,15 +142,18 @@ export async function buildInsights(userId: string) {
       title: "Pul nazorati",
       body:
         net >= 0
-          ? `Bu oy sof +${Math.round(net).toLocaleString("uz-UZ")} so‘m (${cashTx} yozuv). Byudjetni saqlang.`
-          : `Bu oy chiqim kirimdan ko‘p (${Math.round(Math.abs(net)).toLocaleString("uz-UZ")} so‘m). Kategoriyalarni ko‘rib chiqing.`,
+          ? `Bu oy sof +${Math.round(net).toLocaleString("uz-UZ")} so‘m (${cashTx} yozuv).`
+          : `Bu oy chiqim kirimdan ko‘p (${Math.round(Math.abs(net)).toLocaleString("uz-UZ")} so‘m).`,
       tone: net >= 0 ? "high" : "low",
     });
-  } else {
+  }
+
+  // Soft nudge only when the user has tasks but zero secondary activity this week
+  if (week.total > 0 && focusSessions === 0 && journals === 0 && cashTx === 0 && insights.length < 3) {
     insights.push({
-      id: "try-cash",
-      title: "Pul yozuvini boshlang",
-      body: "Birinchi kirim yoki chiqimni qo‘shing — oy oxirida aniq rasm chiqadi.",
+      id: "depth-nudge",
+      title: "Chuqqurroq kuzatuv",
+      body: "Vazifalar yuribdi. Focus yoki kundalik qo‘shsangiz, maslahatlar yanada aniqroq bo‘ladi.",
       tone: "neutral",
     });
   }

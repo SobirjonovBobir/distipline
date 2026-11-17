@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AuthForm } from "./AuthForm";
 import { CashControl } from "./CashControl";
 import { DateNavigator } from "./DateNavigator";
@@ -8,8 +8,10 @@ import { PwaChrome, requestBrowserNotifyPermission, sendLocalNotify } from "./Pw
 import { type Category, type TaskDraft } from "./TaskForm";
 import { TaskSheet } from "./TaskSheet";
 import {
+  addDaysIso,
   daysInMonthGrid,
   describeUzbekDate,
+  monthTitleUz,
   parseIsoDate,
   todayIso,
 } from "@/lib/dates";
@@ -106,8 +108,25 @@ type FocusSession = {
   startedAt: string;
 };
 type JournalEntry = { id: string; date: string; mood: string; body: string; gratitude: string };
-type CalDay = { date: string; tone: string; total: number };
+type CalDay = {
+  date: string;
+  tone: string;
+  total: number;
+  completed?: number;
+  percent?: number | null;
+  label?: string;
+};
 type WeekDay = { date: string; tasks: Task[]; progress: Progress };
+type CatStat = {
+  categoryId: string | null;
+  name: string;
+  color: string;
+  completed: number;
+  total: number;
+  percent: number | null;
+  tone: string;
+  label: string;
+};
 
 const NAV_IDS: { id: View; ico: string }[] = [
   { id: "home", ico: "⌂" },
@@ -184,6 +203,8 @@ export function DistiplineApp() {
   const [toast, setToast] = useState("");
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "open" | "done">("all");
+  const [scheduleFilter, setScheduleFilter] = useState<"" | ScheduleType>("");
   const [sortMode, setSortMode] = useState<"order" | "name" | "status">("order");
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
@@ -195,10 +216,14 @@ export function DistiplineApp() {
   const [jMood, setJMood] = useState("neutral");
   const [jBody, setJBody] = useState("");
   const [jGratitude, setJGratitude] = useState("");
+  const [journalQuery, setJournalQuery] = useState("");
+  const [journalMoodFilter, setJournalMoodFilter] = useState("");
   const [timerMode, setTimerMode] = useState<"pomodoro" | "break">("pomodoro");
   const [timerRunning, setTimerRunning] = useState(false);
   const [timerLeft, setTimerLeft] = useState(25 * 60);
   const [timerElapsed, setTimerElapsed] = useState(0);
+  const [focusBgNote, setFocusBgNote] = useState("");
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
 
   const today = todayIso();
   const isToday = selectedDate === today;
@@ -224,7 +249,9 @@ export function DistiplineApp() {
     setProgress(data.progress ?? { completed: 0, total: 0, percent: null, tone: "neutral", label: "—" });
     if (data.reminder) {
       setBanner(data.reminder);
-      flash(data.reminder.body);
+      // Banner already shows the reminder — avoid toast covering mobile content
+    } else {
+      setBanner(null);
     }
   }, []);
 
@@ -377,6 +404,7 @@ export function DistiplineApp() {
         if (v <= 1) {
           window.clearInterval(id);
           setTimerRunning(false);
+          setFocusBgNote("");
           if (settings.notifyFocus) {
             sendLocalNotify("Discipline · Focus", "Sessiya tugadi — saqlashni unutmang.");
             flash("Focus vaqti tugadi");
@@ -390,6 +418,48 @@ export function DistiplineApp() {
     return () => window.clearInterval(id);
   }, [timerRunning, settings.notifyFocus]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Best-effort Screen Wake Lock + visibility note while Focus runs
+  useEffect(() => {
+    if (!timerRunning) {
+      void wakeLockRef.current?.release().catch(() => undefined);
+      wakeLockRef.current = null;
+      setFocusBgNote("");
+      return;
+    }
+    let cancelled = false;
+    async function requestLock() {
+      try {
+        if (!("wakeLock" in navigator)) {
+          setFocusBgNote("Fon: brauzer yopilmasa taymer davom etadi (best-effort).");
+          return;
+        }
+        const lock = await navigator.wakeLock.request("screen");
+        if (cancelled) {
+          void lock.release();
+          return;
+        }
+        wakeLockRef.current = lock;
+        setFocusBgNote("Ekran uyg‘oq saqlanadi (Wake Lock).");
+        lock.addEventListener("release", () => {
+          if (!cancelled) setFocusBgNote("Wake Lock bo‘shadi — ilovani ochiq qoldiring.");
+        });
+      } catch {
+        setFocusBgNote("Fon: ilovani ochiq qoldiring — taymer best-effort.");
+      }
+    }
+    void requestLock();
+    const onVis = () => {
+      if (document.visibilityState === "visible" && timerRunning) void requestLock();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      void wakeLockRef.current?.release().catch(() => undefined);
+      wakeLockRef.current = null;
+    };
+  }, [timerRunning]);
+
   const filtered = useMemo(() => {
     let list = [...tasks];
     if (query.trim()) {
@@ -397,10 +467,40 @@ export function DistiplineApp() {
       list = list.filter((t) => t.title.toLowerCase().includes(q) || t.notes.toLowerCase().includes(q));
     }
     if (categoryFilter) list = list.filter((t) => t.categoryId === categoryFilter);
+    if (scheduleFilter) list = list.filter((t) => t.scheduleType === scheduleFilter);
+    if (statusFilter === "open") list = list.filter((t) => !t.done);
+    if (statusFilter === "done") list = list.filter((t) => t.done);
     if (sortMode === "name") list.sort((a, b) => a.title.localeCompare(b.title, "uz"));
     if (sortMode === "status") list.sort((a, b) => Number(a.done) - Number(b.done));
     return list;
-  }, [tasks, query, categoryFilter, sortMode]);
+  }, [tasks, query, categoryFilter, scheduleFilter, statusFilter, sortMode]);
+
+  const journalFiltered = useMemo(() => {
+    let list = [...journalList];
+    if (journalMoodFilter) list = list.filter((e) => e.mood === journalMoodFilter);
+    if (journalQuery.trim()) {
+      const q = journalQuery.trim().toLowerCase();
+      list = list.filter(
+        (e) =>
+          e.body.toLowerCase().includes(q) ||
+          e.gratitude.toLowerCase().includes(q) ||
+          e.date.includes(q),
+      );
+    }
+    return list;
+  }, [journalList, journalMoodFilter, journalQuery]);
+
+  const upcomingDays = useMemo(() => {
+    const tomorrow = addDaysIso(today, 1);
+    return weekDays
+      .filter((d) => d.date >= tomorrow)
+      .slice(0, 3)
+      .map((d) => ({
+        ...d,
+        openTasks: d.tasks.filter((t) => !t.done),
+      }))
+      .filter((d) => d.openTasks.length > 0 || d.tasks.length > 0);
+  }, [weekDays, today]);
 
   async function refreshAll() {
     await loadTasks(selectedDate);
@@ -715,7 +815,7 @@ export function DistiplineApp() {
 
           {view === "home" ? (
             <div className="mobile-home">
-              <div className="grid-3" style={{ marginBottom: "0.9rem" }}>
+              <div className="grid-3 home-kpi" style={{ marginBottom: "0.9rem" }}>
                 <div className="card">
                   <h3>{t(locale, "home.today")}</h3>
                   <p className={`stat-num tone-${progress.tone}`}>{progress.label}</p>
@@ -737,6 +837,57 @@ export function DistiplineApp() {
                   <p className="muted">{t(locale, "home.focusHint", { count: focusTotals.count })}</p>
                 </div>
               </div>
+
+              <div className="card home-week-summary" style={{ marginBottom: "0.85rem" }}>
+                <div className="home-week-head">
+                  <div>
+                    <h3>Haftalik xulosa</h3>
+                    <p className="muted" style={{ margin: 0 }}>
+                      {stats?.ranges?.week
+                        ? `${stats.ranges.week.start.slice(5)} — ${stats.ranges.week.end.slice(5)}`
+                        : "So‘nggi 7 kun"}
+                    </p>
+                  </div>
+                  <p className={`stat-num tone-${stats?.week?.tone || "neutral"}`} style={{ fontSize: "1.6rem" }}>
+                    {stats?.week?.label ?? "—"}
+                  </p>
+                </div>
+                <div className="progress-track">
+                  <div
+                    className={`progress-fill tone-${stats?.week?.tone || "neutral"}`}
+                    style={{ width: `${stats?.week?.percent ?? 0}%` }}
+                  />
+                </div>
+                <p className="muted" style={{ marginTop: "0.45rem" }}>
+                  {stats?.week
+                    ? `${stats.week.completed}/${stats.week.total} vazifa`
+                    : "Ma’lumot yuklanmoqda…"}
+                  {stats?.weekDelta != null
+                    ? ` · o‘tgan haftaga ${stats.weekDelta > 0 ? "+" : ""}${stats.weekDelta} punkt`
+                    : ""}
+                </p>
+                {stats?.trend?.length ? (
+                  <div className="stats-bars home-mini-bars" aria-label="7 kunlik mini trend">
+                    {stats.trend.map((point: { date: string; percent: number | null; tone?: string; total?: number }) => {
+                      const max = Math.max(1, ...stats.trend.map((x: { percent: number | null }) => x.percent ?? 0));
+                      const hasTasks = (point.total ?? 0) > 0;
+                      const h =
+                        point.percent == null
+                          ? 0
+                          : Math.max(hasTasks ? 10 : 0, Math.round((point.percent / max) * 100));
+                      return (
+                        <div key={point.date} className="stats-bar-col">
+                          <div className="stats-bar-track">
+                            <div className={`stats-bar-fill tone-${point.tone || "neutral"}`} style={{ height: `${h}%` }} />
+                          </div>
+                          <span>{Number(point.date.slice(-2))}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+
               <div className="grid-2">
                 <div className="card">
                   <h3>{t(locale, "home.smartInsight")}</h3>
@@ -761,7 +912,7 @@ export function DistiplineApp() {
                 </div>
                 <div className="card">
                   <h3>{t(locale, "home.quick")}</h3>
-                  <div className="composer-actions">
+                  <div className="composer-actions quick-actions">
                     <button className="btn btn-primary" type="button" onClick={() => { setView("tasks"); setShowCreate(true); }}>
                       + {t(locale, "nav.tasks")}
                     </button>
@@ -773,6 +924,9 @@ export function DistiplineApp() {
                     </button>
                     <button className="btn btn-ghost" type="button" onClick={() => go("journal")}>
                       {t(locale, "nav.journal")}
+                    </button>
+                    <button className="btn btn-ghost" type="button" onClick={() => go("stats")}>
+                      {t(locale, "nav.short.stats")}
                     </button>
                   </div>
                   {banner ? (
@@ -787,9 +941,50 @@ export function DistiplineApp() {
                       <p>{t(locale, "home.noOpen")}</p>
                     </div>
                   ) : (
-                    <ul className="task-list home-tasks">{open.slice(0, 4).map((t) => renderTask(t))}</ul>
+                    <ul className="task-list home-tasks">{open.slice(0, 4).map((task) => renderTask(task))}</ul>
                   )}
                 </div>
+              </div>
+
+              <div className="card" style={{ marginTop: "0.85rem" }}>
+                <div className="home-week-head">
+                  <h3 style={{ margin: 0 }}>Yaqin kunlar</h3>
+                  <button className="btn btn-ghost" type="button" onClick={() => go("calendar")}>
+                    Kalendar
+                  </button>
+                </div>
+                {upcomingDays.length === 0 ? (
+                  <div className="empty-state compact">
+                    <strong>Yaqin reja yo‘q</strong>
+                    <p>Keyingi kunlarga vazifa qo‘shing.</p>
+                  </div>
+                ) : (
+                  <div className="upcoming-list">
+                    {upcomingDays.map((d) => (
+                      <button
+                        key={d.date}
+                        type="button"
+                        className="upcoming-row"
+                        onClick={() => {
+                          setSelectedDate(d.date);
+                          setView("tasks");
+                        }}
+                      >
+                        <div>
+                          <strong>{describeUzbekDate(d.date).weekdayTitle}</strong>
+                          <span className="muted"> · {d.date.slice(5)}</span>
+                          <p className="muted" style={{ margin: "0.15rem 0 0" }}>
+                            {d.openTasks.length || d.tasks.length} vazifa
+                            {d.openTasks[0] ? ` · ${d.openTasks[0].title}` : ""}
+                          </p>
+                        </div>
+                        <span className={`stat-num tone-${d.progress.tone}`} style={{ fontSize: "1.05rem" }}>
+                          {d.progress.label}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           ) : null}
@@ -849,7 +1044,27 @@ export function DistiplineApp() {
                   <div className={`progress-fill tone-${progress.tone}`} style={{ width: `${progress.percent ?? 0}%` }} />
                 </div>
               </div>
-              <div className="filters">
+
+              <div className="filter-chips" role="group" aria-label="Holat filtri">
+                {(
+                  [
+                    ["all", "Hammasi"],
+                    ["open", "Ochiq"],
+                    ["done", "Bajarilgan"],
+                  ] as const
+                ).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className={`filter-chip${statusFilter === id ? " on" : ""}`}
+                    onClick={() => setStatusFilter(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="filters filters-tasks">
                 <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Qidiruv…" />
                 <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
                   <option value="">Barcha kategoriyalar</option>
@@ -859,106 +1074,177 @@ export function DistiplineApp() {
                     </option>
                   ))}
                 </select>
+                <select
+                  value={scheduleFilter}
+                  onChange={(e) => setScheduleFilter(e.target.value as typeof scheduleFilter)}
+                >
+                  <option value="">Barcha rejimlar</option>
+                  <option value="once">Bir marta</option>
+                  <option value="daily">Har kuni</option>
+                  <option value="weekly">Haftalik</option>
+                  <option value="monthly">Oylik</option>
+                  <option value="range">Oraliq</option>
+                </select>
                 <select value={sortMode} onChange={(e) => setSortMode(e.target.value as typeof sortMode)}>
                   <option value="order">Tartib</option>
                   <option value="name">Nom</option>
                   <option value="status">Holat</option>
                 </select>
               </div>
+
               <h3 className="section-title">
                 {selectedDate < today ? "O‘tkazib yuborilgan" : selectedDate > today ? "Rejalashtirilgan" : "Bugun"}
               </h3>
-              {open.length === 0 ? (
+              {filtered.length === 0 ? (
                 <div className="empty-state">
-                  <strong>Ochiq vazifa yo‘q</strong>
-                  <p>Yangi vazifa qo‘shing yoki sanani o‘zgartiring.</p>
+                  <strong>Vazifa topilmadi</strong>
+                  <p>Filtrlarni o‘zgartiring yoki yangi vazifa qo‘shing.</p>
                   <button className="btn btn-primary" type="button" onClick={() => setShowCreate(true)}>
                     Vazifa yaratish
                   </button>
                 </div>
               ) : (
-                <ul className="task-list">{open.map((t) => renderTask(t, selectedDate < today))}</ul>
-              )}
-              {done.length > 0 ? (
                 <>
-                  <h3 className="section-title">Bajarilgan</h3>
-                  <ul className="task-list">{done.map((t) => renderTask(t))}</ul>
+                  {statusFilter !== "done" && open.length > 0 ? (
+                    <ul className="task-list">
+                      {open.map((task) => renderTask(task, selectedDate < today))}
+                    </ul>
+                  ) : null}
+                  {statusFilter !== "open" && done.length > 0 ? (
+                    <>
+                      {statusFilter === "all" ? <h3 className="section-title">Bajarilgan</h3> : null}
+                      <ul className="task-list">{done.map((task) => renderTask(task))}</ul>
+                    </>
+                  ) : null}
                 </>
-              ) : null}
+              )}
             </div>
           ) : null}
 
           {view === "calendar" ? (
             <div className="mobile-calendar">
-              <div className="composer-actions" style={{ marginBottom: "0.75rem" }}>
+              <div className="composer-actions cal-mode-row" style={{ marginBottom: "0.75rem" }}>
                 <button className={`btn ${calMode === "month" ? "btn-primary" : "btn-ghost"}`} type="button" onClick={() => setCalMode("month")}>
                   Oy
                 </button>
                 <button className={`btn ${calMode === "week" ? "btn-primary" : "btn-ghost"}`} type="button" onClick={() => setCalMode("week")}>
                   Hafta
                 </button>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  onClick={() => setSelectedDate(today)}
+                >
+                  Bugun
+                </button>
               </div>
               <DateNavigator date={selectedDate} onChange={setSelectedDate} dayMeta={calDays} />
               {calMode === "month" ? (
                 <div className="card">
-                  <h3>Oy ko‘rinishi</h3>
-                  <p className="muted">Nuqta: qizil 0–49 · sariq 50–79 · yashil 80–100</p>
+                  <div className="cal-month-nav">
+                    <button
+                      className="btn btn-ghost"
+                      type="button"
+                      onClick={() => {
+                        const { y, m } = parseIsoDate(selectedDate);
+                        const prev = m === 1 ? `${y - 1}-12-01` : `${y}-${String(m - 1).padStart(2, "0")}-01`;
+                        setSelectedDate(prev);
+                      }}
+                    >
+                      ‹
+                    </button>
+                    <div>
+                      <h3 style={{ margin: 0 }}>
+                        {(() => {
+                          const { y, m } = parseIsoDate(selectedDate);
+                          return monthTitleUz(y, m);
+                        })()}
+                      </h3>
+                      <p className="muted" style={{ margin: 0 }}>
+                        Foiz · son · rang: 0–49 / 50–79 / 80–100
+                      </p>
+                    </div>
+                    <button
+                      className="btn btn-ghost"
+                      type="button"
+                      onClick={() => {
+                        const { y, m } = parseIsoDate(selectedDate);
+                        const next = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
+                        setSelectedDate(next);
+                      }}
+                    >
+                      ›
+                    </button>
+                  </div>
                   <div className="calendar-panel">
                     <div className="calendar-dow">
                       {["Du", "Se", "Ch", "Pa", "Ju", "Sh", "Ya"].map((d) => (
                         <span key={d}>{d}</span>
                       ))}
                     </div>
-                    <div className="calendar-grid">
+                    <div className="calendar-grid calendar-grid-rich">
                       {(() => {
                         const { y, m } = parseIsoDate(selectedDate);
                         const meta = new Map(calDays.map((d) => [d.date, d]));
-                        return daysInMonthGrid(y, m).map((cell, idx) =>
-                          cell ? (
+                        return daysInMonthGrid(y, m).map((cell, idx) => {
+                          if (!cell) return <span key={`e-${idx}`} className="calendar-empty" />;
+                          const day = meta.get(cell);
+                          const total = day?.total ?? 0;
+                          const pct = day?.percent;
+                          return (
                             <button
                               key={cell}
                               type="button"
-                              className={`calendar-day tone-${meta.get(cell)?.tone || "neutral"}${cell === selectedDate ? " selected" : ""}${cell === today ? " is-today" : ""}`}
+                              className={`calendar-day rich tone-${day?.tone || "neutral"}${cell === selectedDate ? " selected" : ""}${cell === today ? " is-today" : ""}`}
                               onClick={() => {
                                 setSelectedDate(cell);
                                 setView("tasks");
                               }}
+                              title={total > 0 ? `${day?.completed ?? 0}/${total}` : "Bo‘sh"}
                             >
-                              {Number(cell.slice(-2))}
-                              {(meta.get(cell)?.total ?? 0) > 0 ? <div className="dot" /> : null}
+                              <span className="cal-num">{Number(cell.slice(-2))}</span>
+                              {total > 0 ? (
+                                <span className="cal-pct">
+                                  {pct != null ? `${pct}%` : "—"}
+                                  <small>{day?.completed ?? 0}/{total}</small>
+                                </span>
+                              ) : (
+                                <span className="cal-pct muted-dot">·</span>
+                              )}
                             </button>
-                          ) : (
-                            <span key={`e-${idx}`} className="calendar-empty" />
-                          ),
-                        );
+                          );
+                        });
                       })()}
                     </div>
                   </div>
                 </div>
               ) : (
-                <div className="week-grid">
+                <div className="week-grid week-grid-mobile">
                   {weekDays.map((d) => (
                     <button
                       key={d.date}
                       type="button"
-                      className="week-col"
+                      className={`week-col${d.date === selectedDate ? " selected-day" : ""}`}
                       onClick={() => {
                         setSelectedDate(d.date);
                         setView("tasks");
                       }}
-                      style={{ textAlign: "left", cursor: "pointer" }}
                     >
                       <h4>
                         {describeUzbekDate(d.date).weekdayTitle} {d.date.slice(8)}
                       </h4>
-                      <p className={`stat-num tone-${d.progress.tone}`} style={{ fontSize: "1.2rem" }}>
+                      <p className={`stat-num tone-${d.progress.tone}`} style={{ fontSize: "1.15rem" }}>
                         {d.progress.label}
                       </p>
-                      {d.tasks.slice(0, 4).map((t) => (
-                        <div key={t.id} className={`week-task${t.done ? " done" : ""}`}>
-                          {t.title}
+                      <p className="muted" style={{ margin: "0 0 0.35rem", fontSize: "0.75rem" }}>
+                        {d.progress.completed}/{d.progress.total}
+                      </p>
+                      {d.tasks.slice(0, 4).map((task) => (
+                        <div key={task.id} className={`week-task${task.done ? " done" : ""}`}>
+                          {task.title}
                         </div>
                       ))}
+                      {d.tasks.length === 0 ? <p className="muted" style={{ fontSize: "0.75rem" }}>Bo‘sh</p> : null}
                     </button>
                   ))}
                 </div>
@@ -1056,20 +1342,78 @@ export function DistiplineApp() {
 
           {view === "stats" ? (
             <div className="mobile-stats">
+              {!stats || (stats.day?.total === 0 && stats.week?.total === 0 && stats.month?.total === 0) ? (
+                <div className="card" style={{ marginBottom: "0.85rem" }}>
+                  <div className="empty-state">
+                    <strong>Statistika hali bo‘sh</strong>
+                    <p>Vazifa yarating va belgilang — kun/hafta/oy foizlari shu yerda chiqadi.</p>
+                    <button className="btn btn-primary" type="button" onClick={() => { setView("tasks"); setShowCreate(true); }}>
+                      Vazifa qo‘shish
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="grid-3" style={{ marginBottom: "0.85rem" }}>
                 <div className="card">
                   <h3>Kun</h3>
                   <p className={`stat-num tone-${stats?.day?.tone || "neutral"}`}>{stats?.day?.label ?? "—"}</p>
+                  <p className="muted">{stats?.day ? `${stats.day.completed}/${stats.day.total}` : "—"}</p>
                 </div>
                 <div className="card">
                   <h3>Hafta</h3>
                   <p className={`stat-num tone-${stats?.week?.tone || "neutral"}`}>{stats?.week?.label ?? "—"}</p>
+                  <p className="muted">{stats?.week ? `${stats.week.completed}/${stats.week.total}` : "—"}</p>
                 </div>
                 <div className="card">
                   <h3>Oy</h3>
                   <p className={`stat-num tone-${stats?.month?.tone || "neutral"}`}>{stats?.month?.label ?? "—"}</p>
+                  <p className="muted">{stats?.month ? `${stats.month.completed}/${stats.month.total}` : "—"}</p>
                 </div>
               </div>
+
+              <div className="card" style={{ marginBottom: "0.85rem" }}>
+                <h3>Taqqoslash</h3>
+                {stats?.week && stats?.prevWeek ? (
+                  <div className="compare-grid">
+                    <div>
+                      <p className="muted" style={{ margin: 0 }}>Bu hafta</p>
+                      <p className={`stat-num tone-${stats.week.tone}`} style={{ fontSize: "1.4rem" }}>
+                        {stats.week.label}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="muted" style={{ margin: 0 }}>O‘tgan hafta</p>
+                      <p className={`stat-num tone-${stats.prevWeek.tone}`} style={{ fontSize: "1.4rem" }}>
+                        {stats.prevWeek.label}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="muted" style={{ margin: 0 }}>Farq</p>
+                      <p
+                        className={`stat-num tone-${(stats.weekDelta ?? 0) >= 0 ? "high" : "low"}`}
+                        style={{ fontSize: "1.4rem" }}
+                      >
+                        {stats.weekDelta == null
+                          ? "—"
+                          : `${stats.weekDelta > 0 ? "+" : ""}${stats.weekDelta}`}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="empty-state compact">
+                    <strong>Taqqoslash uchun ma’lumot yetarli emas</strong>
+                    <p>Ikki haftalik vazifalar to‘planganda farq chiqadi.</p>
+                  </div>
+                )}
+                {stats?.trendDelta != null ? (
+                  <p className="muted" style={{ marginTop: "0.55rem" }}>
+                    7 kunlik trend: {stats.trendDelta > 0 ? "+" : ""}
+                    {stats.trendDelta} punkt
+                  </p>
+                ) : null}
+              </div>
+
               <div className="card" style={{ marginBottom: "0.85rem" }}>
                 <h3>7 kunlik trend</h3>
                 {!stats?.trend?.length ? (
@@ -1079,11 +1423,18 @@ export function DistiplineApp() {
                   </div>
                 ) : (
                   <div className="stats-bars">
-                    {(stats?.trend || []).map((point: any) => {
-                      const max = Math.max(1, ...(stats?.trend || []).map((t: any) => t.percent ?? 0));
-                      const h = point.percent === null ? 0 : Math.round((point.percent / max) * 100);
+                    {(stats?.trend || []).map((point: { date: string; percent: number | null; tone?: string; label?: string; total?: number }) => {
+                      const max = Math.max(
+                        1,
+                        ...(stats?.trend || []).map((x: { percent: number | null }) => x.percent ?? 0),
+                      );
+                      const hasTasks = (point.total ?? 0) > 0;
+                      const h =
+                        point.percent === null
+                          ? 0
+                          : Math.max(hasTasks ? 8 : 0, Math.round((point.percent / max) * 100));
                       return (
-                        <div key={point.date} className="stats-bar-col">
+                        <div key={point.date} className="stats-bar-col" title={point.label}>
                           <div className="stats-bar-track">
                             <div className={`stats-bar-fill tone-${point.tone || "neutral"}`} style={{ height: `${h}%` }} />
                           </div>
@@ -1094,6 +1445,37 @@ export function DistiplineApp() {
                   </div>
                 )}
               </div>
+
+              <div className="card" style={{ marginBottom: "0.85rem" }}>
+                <h3>Kategoriya bo‘yicha (hafta)</h3>
+                {!stats?.categories?.length ? (
+                  <div className="empty-state compact">
+                    <strong>Kategoriya statistikasi yo‘q</strong>
+                    <p>Vazifalarga kategoriya qo‘shing — foizlar shu yerda chiqadi.</p>
+                  </div>
+                ) : (
+                  <ul className="cat-stat-list">
+                    {(stats.categories as CatStat[]).map((c) => (
+                      <li key={c.categoryId || c.name}>
+                        <div className="cat-stat-head">
+                          <span>
+                            <span className="cat-dot" style={{ background: c.color }} /> {c.name}
+                          </span>
+                          <strong className={`tone-${c.tone}`}>{c.label}</strong>
+                        </div>
+                        <div className="progress-track">
+                          <div
+                            className={`progress-fill tone-${c.tone}`}
+                            style={{ width: `${c.percent ?? 0}%`, background: c.color }}
+                          />
+                        </div>
+                        <p className="muted">{c.completed}/{c.total}</p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
               <div className="card">
                 <div className="heatmap-head">
                   <div>
@@ -1147,7 +1529,7 @@ export function DistiplineApp() {
           ) : null}
 
           {view === "journal" ? (
-            <div className="grid-2">
+            <div className="grid-2 mobile-journal">
               <form className="card" onSubmit={saveJournal}>
                 <h3>{isToday ? "Bugungi kundalik" : dateInfo.shortLabel}</h3>
                 <DateNavigator date={selectedDate} onChange={setSelectedDate} />
@@ -1181,20 +1563,50 @@ export function DistiplineApp() {
                 </button>
               </form>
               <div className="card">
-                <h3>Oldingi yozuvlar</h3>
-                {journalList.length === 0 ? (
-                  <p className="empty">Hali yozuv yo‘q.</p>
+                <h3>Tarix</h3>
+                <div className="filters journal-filters">
+                  <input
+                    value={journalQuery}
+                    onChange={(e) => setJournalQuery(e.target.value)}
+                    placeholder="Qidiruv…"
+                    aria-label="Kundalik qidiruv"
+                  />
+                  <select
+                    value={journalMoodFilter}
+                    onChange={(e) => setJournalMoodFilter(e.target.value)}
+                    aria-label="Kayfiyat filtri"
+                  >
+                    <option value="">Barcha kayfiyat</option>
+                    <option value="great">A’lo</option>
+                    <option value="good">Yaxshi</option>
+                    <option value="neutral">Oddiy</option>
+                    <option value="low">Og‘ir</option>
+                  </select>
+                </div>
+                {journalFiltered.length === 0 ? (
+                  <div className="empty-state compact">
+                    <strong>{journalList.length === 0 ? "Hali yozuv yo‘q" : "Mos yozuv topilmadi"}</strong>
+                    <p>{journalList.length === 0 ? "Bugungi kayfiyatni yozib boshlang." : "Qidiruv yoki filterni o‘zgartiring."}</p>
+                  </div>
                 ) : (
-                  journalList.slice(0, 12).map((e) => (
+                  journalFiltered.slice(0, 30).map((e) => (
                     <button
                       key={e.id}
                       type="button"
-                      className="journal-item"
-                      style={{ width: "100%", textAlign: "left", cursor: "pointer" }}
+                      className={`journal-item mood-${e.mood}${e.date === selectedDate ? " on" : ""}`}
                       onClick={() => setSelectedDate(e.date)}
                     >
-                      <strong>{e.date}</strong> · {e.mood}
-                      <p>{e.body || e.gratitude}</p>
+                      <strong>{e.date}</strong>
+                      <span className={`mood-tag mood-${e.mood}`}>
+                        {e.mood === "great"
+                          ? "A’lo"
+                          : e.mood === "good"
+                            ? "Yaxshi"
+                            : e.mood === "low"
+                              ? "Og‘ir"
+                              : "Oddiy"}
+                      </span>
+                      <p>{e.body || e.gratitude || "—"}</p>
                     </button>
                   ))
                 )}
@@ -1205,7 +1617,7 @@ export function DistiplineApp() {
           {view === "focus" ? (
             <div className="grid-2 mobile-focus">
               <div className="card focus-timer">
-                <div className="composer-actions" style={{ justifyContent: "center" }}>
+                <div className="composer-actions focus-mode-row" style={{ justifyContent: "center" }}>
                   <button
                     className={`btn ${timerMode === "pomodoro" ? "btn-primary" : "btn-ghost"}`}
                     type="button"
@@ -1216,7 +1628,7 @@ export function DistiplineApp() {
                       setTimerLeft((settings?.focusWorkMinutes || 25) * 60);
                     }}
                   >
-                    Ish
+                    Ish · {settings?.focusWorkMinutes || 25}d
                   </button>
                   <button
                     className={`btn ${timerMode === "break" ? "btn-primary" : "btn-ghost"}`}
@@ -1228,17 +1640,47 @@ export function DistiplineApp() {
                       setTimerLeft((settings?.focusBreakMinutes || 5) * 60);
                     }}
                   >
-                    Tanaffus
+                    Tanaffus · {settings?.focusBreakMinutes || 5}d
                   </button>
                 </div>
                 <p className="focus-clock">{fmtMin(timerLeft)}</p>
+                <div className="focus-ring" aria-hidden>
+                  <div
+                    className="focus-ring-fill"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.round(
+                          (timerElapsed /
+                            Math.max(
+                              1,
+                              (timerMode === "break"
+                                ? settings?.focusBreakMinutes || 5
+                                : settings?.focusWorkMinutes || 25) * 60,
+                            )) *
+                            100,
+                        ),
+                      )}%`,
+                    }}
+                  />
+                </div>
                 <div className="focus-actions">
                   {!timerRunning ? (
-                    <button className="btn btn-primary" type="button" onClick={() => setTimerRunning(true)}>
+                    <button
+                      className="btn btn-primary focus-main-btn"
+                      type="button"
+                      onClick={async () => {
+                        if (settings.notifyFocus && notifyPerm !== "granted" && notifyPerm !== "unsupported") {
+                          const p = await requestBrowserNotifyPermission();
+                          setNotifyPerm(p);
+                        }
+                        setTimerRunning(true);
+                      }}
+                    >
                       Boshlash
                     </button>
                   ) : (
-                    <button className="btn btn-ghost" type="button" onClick={() => setTimerRunning(false)}>
+                    <button className="btn btn-ghost focus-main-btn" type="button" onClick={() => setTimerRunning(false)}>
                       Pauza
                     </button>
                   )}
@@ -1247,23 +1689,49 @@ export function DistiplineApp() {
                     type="button"
                     onClick={() => void saveFocus(timerLeft === 0 ? "completed" : "aborted")}
                   >
-                    {timerLeft === 0 ? "Saqlash" : "To‘xtatish va saqlash"}
+                    {timerLeft === 0 ? "Saqlash" : "To‘xtatish"}
+                  </button>
+                  <button
+                    className="btn btn-ghost"
+                    type="button"
+                    onClick={() => {
+                      setTimerRunning(false);
+                      setTimerElapsed(0);
+                      setTimerLeft(
+                        (timerMode === "break"
+                          ? settings?.focusBreakMinutes || 5
+                          : settings?.focusWorkMinutes || 25) * 60,
+                      );
+                    }}
+                  >
+                    Reset
                   </button>
                 </div>
                 {timerLeft === 0 ? <p className="muted">Vaqt tugadi — saqlang.</p> : null}
+                {focusBgNote ? <p className="focus-bg-note">{focusBgNote}</p> : null}
+                <p className="muted" style={{ marginTop: "0.55rem", fontSize: "0.8rem" }}>
+                  Bildirishnoma: {settings.notifyFocus ? "yoqilgan" : "o‘chirilgan"} · ruxsat: {notifyPerm}
+                </p>
               </div>
               <div className="card">
-                <h3>Sessiyalar</h3>
+                <h3>Sessiya tarixi</h3>
                 <p className="muted">
                   Jami {Math.round(focusTotals.seconds / 60)} daqiqa · {focusTotals.count} ta
                 </p>
                 {focusSessions.length === 0 ? (
-                  <p className="empty">Hali sessiya yo‘q.</p>
+                  <div className="empty-state compact">
+                    <strong>Hali sessiya yo‘q</strong>
+                    <p>Birinchi Pomodoro’ni boshlang — natija shu yerda saqlanadi.</p>
+                  </div>
                 ) : (
-                  focusSessions.slice(0, 12).map((s) => (
-                    <div key={s.id} className="note-item">
+                  focusSessions.slice(0, 20).map((s) => (
+                    <div key={s.id} className={`note-item focus-hist ${s.status}`}>
                       <p>
-                        <strong>{s.mode}</strong> · {Math.round(s.elapsedSeconds / 60)} daq · {s.status}
+                        <strong>{s.mode === "break" ? "Tanaffus" : "Ish"}</strong>
+                        {" · "}
+                        {Math.round(s.elapsedSeconds / 60)}/{Math.round(s.plannedSeconds / 60)} daq
+                        {" · "}
+                        {s.status === "completed" ? "tugadi" : s.status === "aborted" ? "to‘xtatildi" : s.status}
                       </p>
                       <p className="muted">{s.startedAt}</p>
                     </div>

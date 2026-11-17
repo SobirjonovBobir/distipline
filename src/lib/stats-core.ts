@@ -122,3 +122,86 @@ export async function computeStreak(userId: string, date: string) {
   }
   return streak;
 }
+
+type CatAgg = {
+  categoryId: string | null;
+  name: string;
+  color: string;
+  completed: number;
+  total: number;
+  percent: number | null;
+  tone: string;
+  label: string;
+};
+
+/** Per-category completion inside [from, to] using real occurrences. */
+export async function summarizeByCategory(
+  userId: string,
+  from: string,
+  to: string,
+  defs?: TaskDefinition[],
+) {
+  const taskDefs = defs ?? (await loadDefs(userId));
+  const cats = await sql<{ id: string; name: string; color: string }>(
+    `select id, name, color from categories where user_id = $1`,
+    [userId],
+  );
+  const catMap = new Map(cats.map((c) => [c.id, c]));
+  const completions = await sql<CompletionRow>(
+    `select task_id, occurrence_date::text as occurrence_date, done
+     from task_completions
+     where user_id = $1 and occurrence_date >= $2 and occurrence_date <= $3`,
+    [userId, from, to],
+  );
+  const done = new Set(
+    completions
+      .filter((c) => c.done)
+      .map((c) => `${c.task_id}:${String(c.occurrence_date).slice(0, 10)}`),
+  );
+
+  const buckets = new Map<string, { categoryId: string | null; name: string; color: string; completed: number; total: number }>();
+  const ensure = (key: string, categoryId: string | null) => {
+    if (!buckets.has(key)) {
+      const cat = categoryId ? catMap.get(categoryId) : null;
+      buckets.set(key, {
+        categoryId,
+        name: cat?.name || "Kategoriyasiz",
+        color: cat?.color || "#8a9a90",
+        completed: 0,
+        total: 0,
+      });
+    }
+    return buckets.get(key)!;
+  };
+
+  let cursor = from;
+  while (cursor <= to) {
+    for (const def of taskDefs) {
+      if (!occursOnDate(def, cursor)) continue;
+      const key = def.category_id || "__none__";
+      const b = ensure(key, def.category_id);
+      b.total += 1;
+      if (done.has(`${def.id}:${cursor}`)) b.completed += 1;
+    }
+    cursor = addDaysIso(cursor, 1);
+  }
+
+  const result: CatAgg[] = [...buckets.values()]
+    .filter((b) => b.total > 0)
+    .map((b) => {
+      const disp = progressDisplay(b.completed, b.total);
+      return {
+        categoryId: b.categoryId,
+        name: b.name,
+        color: b.color,
+        completed: b.completed,
+        total: b.total,
+        percent: disp.percent,
+        tone: disp.tone,
+        label: disp.label,
+      };
+    })
+    .sort((a, b) => b.total - a.total || a.name.localeCompare(b.name, "uz"));
+
+  return result;
+}
