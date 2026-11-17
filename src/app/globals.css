@@ -972,12 +972,26 @@ body:has(.offline-banner) .app-frame {
   .mobile-nav-btn {
     display: grid;
     justify-items: center;
-    gap: 0.12rem;
-    padding: 0.4rem 0.2rem;
-    font-size: 0.66rem;
+    align-content: center;
+    gap: 0.15rem;
+    padding: 0.35rem 0.15rem 0.3rem;
+    font-size: 0.64rem;
     min-height: 52px;
+    line-height: 1.1;
   }
-  .mobile-nav-ico { display: block; }
+  .mobile-nav-btn.active {
+    border-radius: 14px;
+  }
+  .mobile-nav-ico {
+    display: block;
+    font-size: 1rem;
+    line-height: 1;
+  }
+  .mobile-nav-btn > span:last-child {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .sheet-panel {
     width: 100%;
     max-height: min(88dvh, 720px);
