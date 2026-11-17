@@ -121,16 +121,17 @@ const uz: Dict = {
   "auth.signup": "Ro‘yxatdan o‘tish",
   "auth.waiting": "Kutilmoqda…",
   "auth.forgot": "Parolni unutdingizmi?",
-  "auth.resetSubmit": "Parolni yangilash",
-  "auth.resetOk":
-    "Agar bu email ro‘yxatdan o‘tgan bo‘lsa, parol yangilandi. Endi kirishingiz mumkin.",
+  "auth.forgotHint":
+    "Email orqali tiklash hozircha yo‘q. Kirganingizdan keyin Sozlamalar → Parol orqali o‘zgartiring.",
   "auth.mismatch": "Parollar mos kelmadi.",
   "auth.error": "Xatolik yuz berdi.",
   "auth.network": "Tarmoq xatosi. Qayta urinib ko‘ring.",
   "auth.noAccount": "Hisobingiz yo‘qmi?",
   "auth.hasAccount": "Allaqachon hisobingiz bormi?",
-  "auth.remembered": "Parolni esladingizmi?",
-  "auth.backToLogin": "Kirishga qaytish",
+  "settings.password": "Parol",
+  "settings.currentPassword": "Joriy parol",
+  "settings.changePassword": "Parolni o‘zgartirish",
+  "settings.passwordChanged": "Parol yangilandi.",
 };
 
 const en: Dict = {
@@ -245,16 +246,17 @@ const en: Dict = {
   "auth.signup": "Sign up",
   "auth.waiting": "Please wait…",
   "auth.forgot": "Forgot your password?",
-  "auth.resetSubmit": "Update password",
-  "auth.resetOk":
-    "If this email is registered, the password was updated. You can log in now.",
+  "auth.forgotHint":
+    "Email reset is not available yet. After you sign in, change it under Settings → Password.",
   "auth.mismatch": "Passwords do not match.",
   "auth.error": "Something went wrong.",
   "auth.network": "Network error. Try again.",
   "auth.noAccount": "No account yet?",
   "auth.hasAccount": "Already have an account?",
-  "auth.remembered": "Remembered your password?",
-  "auth.backToLogin": "Back to login",
+  "settings.password": "Password",
+  "settings.currentPassword": "Current password",
+  "settings.changePassword": "Change password",
+  "settings.passwordChanged": "Password updated.",
 };
 
 const ru: Dict = {
@@ -369,16 +371,17 @@ const ru: Dict = {
   "auth.signup": "Регистрация",
   "auth.waiting": "Подождите…",
   "auth.forgot": "Забыли пароль?",
-  "auth.resetSubmit": "Обновить пароль",
-  "auth.resetOk":
-    "Если этот email зарегистрирован, пароль обновлён. Теперь можно войти.",
+  "auth.forgotHint":
+    "Сброс по email пока недоступен. После входа смените пароль в Настройки → Пароль.",
   "auth.mismatch": "Пароли не совпадают.",
   "auth.error": "Произошла ошибка.",
   "auth.network": "Ошибка сети. Попробуйте ещё раз.",
   "auth.noAccount": "Нет аккаунта?",
   "auth.hasAccount": "Уже есть аккаунт?",
-  "auth.remembered": "Вспомнили пароль?",
-  "auth.backToLogin": "К входу",
+  "settings.password": "Пароль",
+  "settings.currentPassword": "Текущий пароль",
+  "settings.changePassword": "Сменить пароль",
+  "settings.passwordChanged": "Пароль обновлён.",
 };
 
 const TABLES: Record<Locale, Dict> = { uz, en, ru };

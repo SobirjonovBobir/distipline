@@ -4,14 +4,23 @@ import bcrypt from "bcryptjs";
 import { sql } from "./db";
 
 const COOKIE = "distipline_session";
-const LOCAL_FALLBACK_SECRET = "distipline-local-dev-only-not-for-production";
+
+let ephemeralDevSecret: Uint8Array | undefined;
 
 function secretKey() {
   const value =
-    process.env.AUTH_SECRET?.trim() ||
-    process.env.SESSION_SECRET?.trim() ||
-    LOCAL_FALLBACK_SECRET;
-  return new TextEncoder().encode(value);
+    process.env.AUTH_SECRET?.trim() || process.env.SESSION_SECRET?.trim() || "";
+  if (value) {
+    return new TextEncoder().encode(value);
+  }
+  // Hosted / production must never sign cookies without a host-supplied secret.
+  const hosted = Boolean(process.env.DATABASE_URL?.trim());
+  if (process.env.NODE_ENV === "production" || hosted) {
+    throw new Error("AUTH_SECRET is required");
+  }
+  // Local-only: random per-process secret (not a fixed string in the repo).
+  ephemeralDevSecret ??= crypto.getRandomValues(new Uint8Array(32));
+  return ephemeralDevSecret;
 }
 
 export type SessionUser = {
@@ -88,6 +97,14 @@ export async function findUserByEmail(email: string) {
   return rows[0] ?? null;
 }
 
+export async function findUserById(id: string) {
+  const rows = await sql<UserRow>(
+    "select id, email, display_name, password_hash from users where id = $1 limit 1",
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
 export async function createUser(input: {
   email: string;
   password: string;
@@ -107,15 +124,15 @@ export async function createUser(input: {
   } satisfies SessionUser;
 }
 
-/** Local/dev reset: update hash when email exists. Returns whether a row changed. */
-export async function updatePasswordByEmail(email: string, password: string) {
+/** Authenticated password change for the signed-in user id only. */
+export async function updatePasswordForUser(userId: string, password: string) {
   const passwordHash = await hashPassword(password);
   const rows = await sql<{ id: string }>(
     `update users
      set password_hash = $2
-     where email = $1
+     where id = $1
      returning id`,
-    [email.toLowerCase(), passwordHash],
+    [userId, passwordHash],
   );
   return rows.length > 0;
 }

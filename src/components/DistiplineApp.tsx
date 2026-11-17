@@ -172,6 +172,10 @@ export function DistiplineApp() {
   const [achievements, setAchievements] = useState<Achievement[]>([]);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsReady, setSettingsReady] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordBusy, setPasswordBusy] = useState(false);
   const [focusSessions, setFocusSessions] = useState<FocusSession[]>([]);
   const [focusTotals, setFocusTotals] = useState({ seconds: 0, count: 0 });
   const [journal, setJournal] = useState<JournalEntry | null>(null);
@@ -482,6 +486,41 @@ export function DistiplineApp() {
   async function logout() {
     await fetch("/api/auth/logout", { method: "POST" });
     setUser(null);
+  }
+
+  async function changePassword(event: FormEvent) {
+    event.preventDefault();
+    if (passwordBusy) return;
+    const loc = settings.locale || "uz";
+    if (newPassword !== confirmPassword) {
+      flash(t(loc, "auth.mismatch"));
+      return;
+    }
+    setPasswordBusy(true);
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentPassword,
+          password: newPassword,
+          confirmPassword,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        flash(data.error || t(loc, "auth.error"));
+        return;
+      }
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      flash(t(loc, "settings.passwordChanged"));
+    } catch {
+      flash(t(loc, "auth.network"));
+    } finally {
+      setPasswordBusy(false);
+    }
   }
 
   async function saveFocus(status: "completed" | "aborted") {
@@ -1236,6 +1275,49 @@ export function DistiplineApp() {
 
           {view === "settings" ? (
             <div className="grid-2">
+              <div className="card">
+                <h3>{t(locale, "settings.password")}</h3>
+                <form onSubmit={(e) => void changePassword(e)}>
+                  <div className="field">
+                    <label>{t(locale, "settings.currentPassword")}</label>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      autoComplete="current-password"
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                    />
+                  </div>
+                  <div className="field">
+                    <label>{t(locale, "auth.newPassword")}</label>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      autoComplete="new-password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder={t(locale, "auth.passwordHint")}
+                    />
+                  </div>
+                  <div className="field">
+                    <label>{t(locale, "auth.confirmPassword")}</label>
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      autoComplete="new-password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                    />
+                  </div>
+                  <button className="btn btn-primary" type="submit" disabled={passwordBusy}>
+                    {passwordBusy ? t(locale, "auth.waiting") : t(locale, "settings.changePassword")}
+                  </button>
+                </form>
+              </div>
+
               <div className="card">
                 <h3>{t(locale, "settings.appearance")}</h3>
                 {!settingsReady ? <p className="muted">{t(locale, "loading")}</p> : null}

@@ -3,7 +3,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { t } from "@/lib/i18n";
 
-type Mode = "login" | "signup" | "reset";
+type Mode = "login" | "signup";
 type Props = { onSuccess: () => void };
 
 function authLocale() {
@@ -17,7 +17,6 @@ export function AuthForm({ onSuccess }: Props) {
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -28,7 +27,6 @@ export function AuthForm({ onSuccess }: Props) {
     setError("");
     setInfo("");
     setPassword("");
-    setConfirmPassword("");
   }
 
   async function submit(event: FormEvent) {
@@ -37,28 +35,6 @@ export function AuthForm({ onSuccess }: Props) {
     setError("");
     setInfo("");
     try {
-      if (mode === "reset") {
-        if (password !== confirmPassword) {
-          setError(t(locale, "auth.mismatch"));
-          return;
-        }
-        const res = await fetch("/api/auth/reset-password", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, password, confirmPassword }),
-        });
-        const data = await res.json();
-        if (!res.ok) {
-          setError(data.error || t(locale, "auth.error"));
-          return;
-        }
-        setInfo(data.message || t(locale, "auth.resetOk"));
-        setPassword("");
-        setConfirmPassword("");
-        setMode("login");
-        return;
-      }
-
       const res = await fetch(`/api/auth/${mode === "login" ? "login" : "signup"}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -105,7 +81,7 @@ export function AuthForm({ onSuccess }: Props) {
             />
           </label>
           <label>
-            {mode === "reset" ? t(locale, "auth.newPassword") : t(locale, "auth.password")}
+            {t(locale, "auth.password")}
             <input
               type="password"
               required
@@ -116,20 +92,6 @@ export function AuthForm({ onSuccess }: Props) {
               autoComplete={mode === "login" ? "current-password" : "new-password"}
             />
           </label>
-          {mode === "reset" ? (
-            <label>
-              {t(locale, "auth.confirmPassword")}
-              <input
-                type="password"
-                required
-                minLength={6}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder={t(locale, "auth.passwordHint")}
-                autoComplete="new-password"
-              />
-            </label>
-          ) : null}
           {error ? <p className="error-text">{error}</p> : null}
           {info ? <p className="success-text">{info}</p> : null}
           <button className="btn btn-primary" type="submit" disabled={loading}>
@@ -137,14 +99,19 @@ export function AuthForm({ onSuccess }: Props) {
               ? t(locale, "auth.waiting")
               : mode === "login"
                 ? t(locale, "auth.login")
-                : mode === "signup"
-                  ? t(locale, "auth.signup")
-                  : t(locale, "auth.resetSubmit")}
+                : t(locale, "auth.signup")}
           </button>
         </form>
         {mode === "login" ? (
           <div className="auth-switch">
-            <button className="btn btn-ghost" type="button" onClick={() => switchMode("reset")}>
+            <button
+              className="btn btn-ghost"
+              type="button"
+              onClick={() => {
+                setError("");
+                setInfo(t(locale, "auth.forgotHint"));
+              }}
+            >
               {t(locale, "auth.forgot")}
             </button>
           </div>
@@ -157,18 +124,11 @@ export function AuthForm({ onSuccess }: Props) {
                 {t(locale, "auth.signup")}
               </button>
             </>
-          ) : mode === "signup" ? (
+          ) : (
             <>
               <span>{t(locale, "auth.hasAccount")}</span>
               <button className="btn btn-ghost" type="button" onClick={() => switchMode("login")}>
                 {t(locale, "auth.login")}
-              </button>
-            </>
-          ) : (
-            <>
-              <span>{t(locale, "auth.remembered")}</span>
-              <button className="btn btn-ghost" type="button" onClick={() => switchMode("login")}>
-                {t(locale, "auth.backToLogin")}
               </button>
             </>
           )}

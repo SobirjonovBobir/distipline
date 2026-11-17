@@ -35,7 +35,7 @@ npm run dev
 ## Eslatmalar
 
 - Ma’lumotlar `.data/pglite` ichida saqlanadi (birinchi ishga tushirishda yaratiladi).
-- `AUTH_SECRET` ixtiyoriy; bo‘lmasa lokal default ishlatiladi. Istasangiz: `export AUTH_SECRET="o‘zingizning-maxfiy-kalitingiz"`.
+- Hosted/production uchun `AUTH_SECRET` majburiy (Cursor Secrets). Lokalda ixtiyoriy — jarayon uchun vaqtinchalik maxfiy kalit yaratiladi. Istasangiz: `export AUTH_SECRET="o‘zingizning-maxfiy-kalitingiz"`.
 - Port band bo‘lsa: `npx next dev --port 3001`.
 - `node_modules`, `.data`, `.next` zipga kiritilmagan — `npm install` majburiy.
 
