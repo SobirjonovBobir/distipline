@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="uz">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0f3d2c" />
+    <title>Discipline — oflayn</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #e8f0ea;
+        --brand: #0d3b2c;
+        --ink: #10241a;
+        --muted: #4a6356;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        padding: 1.5rem;
+        font-family: Figtree, Segoe UI, sans-serif;
+        color: var(--ink);
+        background:
+          radial-gradient(900px 500px at 10% -10%, rgba(47, 122, 85, 0.2), transparent 55%),
+          linear-gradient(165deg, #edf3ef, #dfe8e2);
+      }
+      .card {
+        width: min(420px, 100%);
+        background: rgba(255, 255, 255, 0.82);
+        border: 1px solid rgba(16, 36, 26, 0.12);
+        border-radius: 18px;
+        padding: 1.25rem 1.2rem;
+        box-shadow: 0 18px 50px rgba(13, 59, 44, 0.12);
+      }
+      h1 {
+        margin: 0;
+        font-family: "Bricolage Grotesque", Segoe UI, sans-serif;
+        letter-spacing: -0.04em;
+        color: var(--brand);
+        font-size: 2rem;
+      }
+      p { color: var(--muted); line-height: 1.45; }
+      button {
+        border: 0;
+        border-radius: 999px;
+        padding: 0.75rem 1.05rem;
+        background: var(--brand);
+        color: #f3faf6;
+        font-weight: 650;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Discipline</h1>
+      <p>Siz oflaynsiz. Saqlangan ikonka va splash ochiladi; ma’lumotlar tarmoq qaytgach yangilanadi.</p>
+      <button type="button" onclick="location.reload()">Qayta urinish</button>
+    </main>
+  </body>
+</html>
