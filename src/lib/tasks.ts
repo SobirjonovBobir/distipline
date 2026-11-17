@@ -73,6 +73,15 @@ export async function listCategories(userId: string): Promise<Category[]> {
   }));
 }
 
+async function ownedCategoryId(userId: string, categoryId: string | null | undefined) {
+  if (!categoryId) return null;
+  const rows = await sql<{ id: string }>(
+    `select id from categories where id = $1 and user_id = $2 limit 1`,
+    [categoryId, userId],
+  );
+  return rows[0]?.id ?? null;
+}
+
 async function loadTaskRows(userId: string) {
   return sql<TaskRow>(
     `select t.id, t.title, t.schedule_type,
@@ -81,7 +90,7 @@ async function loadTaskRows(userId: string) {
             t.weekdays, t.category_id, t.notes, t.archived, t.sort_order,
             c.name as category_name, c.color as category_color
      from tasks t
-     left join categories c on c.id = t.category_id
+     left join categories c on c.id = t.category_id and c.user_id = t.user_id
      where t.user_id = $1 and t.archived = false
      order by t.sort_order asc, t.created_at asc`,
     [userId],
@@ -198,6 +207,8 @@ export async function createTask(
         ? input.endDate || startDate
         : input.endDate || null;
 
+  const categoryId = await ownedCategoryId(userId, input.categoryId ?? null);
+
   await sql(
     `insert into tasks (
        id, user_id, task_date, title, done, sort_order,
@@ -213,7 +224,7 @@ export async function createTask(
       startDate,
       endDate,
       input.weekdays || "",
-      input.categoryId || null,
+      categoryId,
       input.notes || "",
     ],
   );
@@ -255,7 +266,10 @@ export async function updateTask(
         : null;
   if (scheduleType === "once") endDate = startDate;
   const weekdays = input.weekdays ?? cur.weekdays;
-  const categoryId = input.categoryId !== undefined ? input.categoryId : cur.category_id;
+  const categoryId =
+    input.categoryId !== undefined
+      ? await ownedCategoryId(userId, input.categoryId)
+      : cur.category_id;
   const notes = input.notes ?? cur.notes;
   const archived = input.archived ?? cur.archived;
 

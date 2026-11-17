@@ -1,9 +1,17 @@
 import { NextResponse } from "next/server";
 import { createSession, createUser, findUserByEmail } from "@/lib/auth";
 import { ensureDefaultCategories } from "@/lib/categories";
+import { allowRequest, clientKey } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
+    if (!allowRequest(clientKey(request, "signup"), { limit: 10, windowMs: 15 * 60 * 1000 })) {
+      return NextResponse.json(
+        { error: "Juda ko‘p urinish. Birozdan keyin qayta urinib ko‘ring." },
+        { status: 429 },
+      );
+    }
+
     const body = (await request.json()) as {
       email?: string;
       password?: string;

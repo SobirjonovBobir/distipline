@@ -5,9 +5,17 @@ import {
   toSessionUser,
   verifyPassword,
 } from "@/lib/auth";
+import { allowRequest, clientKey } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
+    if (!allowRequest(clientKey(request, "login"), { limit: 20, windowMs: 15 * 60 * 1000 })) {
+      return NextResponse.json(
+        { error: "Juda ko‘p urinish. Birozdan keyin qayta urinib ko‘ring." },
+        { status: 429 },
+      );
+    }
+
     const body = (await request.json()) as { email?: string; password?: string };
     const email = body.email?.trim().toLowerCase() ?? "";
     const password = body.password ?? "";

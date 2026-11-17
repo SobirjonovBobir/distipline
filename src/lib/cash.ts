@@ -248,6 +248,19 @@ export async function getCashDashboard(userId: string, monthKey?: string) {
   };
 }
 
+async function ownedAccountId(userId: string, accountId: string | undefined) {
+  const fallback = await ensureAccount(userId);
+  const requested = accountId?.trim();
+  if (!requested || requested === fallback.id) return fallback.id;
+  const rows = await sql<{ id: string }>(
+    `select id from cash_accounts
+     where id = $1 and user_id = $2 and archived = false
+     limit 1`,
+    [requested, userId],
+  );
+  return rows[0]?.id ?? fallback.id;
+}
+
 export async function addCashTransaction(
   userId: string,
   input: {
@@ -259,7 +272,7 @@ export async function addCashTransaction(
     accountId?: string;
   },
 ) {
-  const account = await ensureAccount(userId);
+  const accountId = await ownedAccountId(userId, input.accountId);
   const id = crypto.randomUUID();
   const amount = Math.round(Math.abs(Number(input.amount) || 0) * 100) / 100;
   if (amount <= 0) throw new Error("Summa noto‘g‘ri");
@@ -272,7 +285,7 @@ export async function addCashTransaction(
     [
       id,
       userId,
-      input.accountId || account.id,
+      accountId,
       kind,
       amount,
       (input.category || "Umumiy").trim() || "Umumiy",
