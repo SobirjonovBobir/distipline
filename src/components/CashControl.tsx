@@ -59,6 +59,8 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
   const [savingTarget, setSavingTarget] = useState("");
   const [tab, setTab] = useState<"overview" | "history" | "budget" | "savings">("overview");
   const [categories, setCategories] = useState<CashCat[]>([]);
+  const [historyQuery, setHistoryQuery] = useState("");
+  const [historyKind, setHistoryKind] = useState<"" | "income" | "expense">("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -114,6 +116,21 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
     const vals = (summary?.trend || []).flatMap((t) => [t.income, t.expense]);
     return Math.max(1, ...vals);
   }, [summary]);
+
+  const filteredTxs = useMemo(() => {
+    let list = [...txs];
+    if (historyKind) list = list.filter((t) => t.kind === historyKind);
+    if (historyQuery.trim()) {
+      const q = historyQuery.trim().toLowerCase();
+      list = list.filter(
+        (t) =>
+          t.category.toLowerCase().includes(q) ||
+          t.note.toLowerCase().includes(q) ||
+          t.occurredOn.includes(q),
+      );
+    }
+    return list;
+  }, [txs, historyKind, historyQuery]);
 
   async function addTx(e: FormEvent) {
     e.preventDefault();
@@ -293,15 +310,37 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
 
       {tab === "history" ? (
         <div className="card">
-          <h3>Tarix</h3>
+          <h3>Tarix · {month}</h3>
+          <div className="filters journal-filters" style={{ marginBottom: "0.65rem" }}>
+            <input
+              value={historyQuery}
+              onChange={(e) => setHistoryQuery(e.target.value)}
+              placeholder="Qidiruv…"
+              aria-label="Tranzaksiya qidiruv"
+            />
+            <select
+              value={historyKind}
+              onChange={(e) => setHistoryKind(e.target.value as typeof historyKind)}
+              aria-label="Tur filtri"
+            >
+              <option value="">Hammasi</option>
+              <option value="income">Kirim</option>
+              <option value="expense">Chiqim</option>
+            </select>
+          </div>
           {txs.length === 0 ? (
             <div className="empty-state">
               <strong>Tranzaksiyalar yo‘q</strong>
               <p>Umumiy bo‘limdan kirim/chiqim qo‘shing.</p>
             </div>
+          ) : filteredTxs.length === 0 ? (
+            <div className="empty-state compact">
+              <strong>Mos yozuv yo‘q</strong>
+              <p>Qidiruv yoki filterni o‘zgartiring.</p>
+            </div>
           ) : (
             <ul className="cash-history">
-              {txs.map((t) => (
+              {filteredTxs.map((t) => (
                 <li key={t.id} className={`cash-tx ${t.kind}`}>
                   <div>
                     <strong>{t.category}</strong>

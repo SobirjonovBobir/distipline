@@ -24,6 +24,14 @@ const WEEKDAY_OPTS = [
   { v: 7, l: "Ya" },
 ];
 
+const SCHEDULE_OPTS: { value: ScheduleType; label: string; hint: string }[] = [
+  { value: "once", label: "Bir marta", hint: "Faqat tanlangan sanada" },
+  { value: "daily", label: "Har kuni", hint: "Har kuni takrorlanadi" },
+  { value: "weekly", label: "Haftalik", hint: "Tanlangan hafta kunlarida" },
+  { value: "monthly", label: "Oylik", hint: "Har oy shu sanada" },
+  { value: "range", label: "Oraliq", hint: "Boshlanish–tugash oralig‘ida" },
+];
+
 type Props = {
   initial: TaskDraft;
   categories: Category[];
@@ -39,6 +47,8 @@ export function TaskForm({ initial, categories, submitLabel, onSubmit, onCancel 
     () => new Set(draft.weekdays.split(",").filter(Boolean).map(Number)),
     [draft.weekdays],
   );
+  const scheduleHint =
+    SCHEDULE_OPTS.find((o) => o.value === draft.scheduleType)?.hint || "";
 
   function toggleDay(day: number) {
     const next = new Set(selected);
@@ -53,6 +63,7 @@ export function TaskForm({ initial, categories, submitLabel, onSubmit, onCancel 
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!draft.title.trim() || busy) return;
+    if (draft.scheduleType === "weekly" && selected.size === 0) return;
     setBusy(true);
     try {
       await onSubmit({
@@ -66,7 +77,7 @@ export function TaskForm({ initial, categories, submitLabel, onSubmit, onCancel 
   }
 
   return (
-    <form className="card" onSubmit={submit} style={{ marginBottom: "0.85rem" }}>
+    <form className="card task-form-compact" onSubmit={submit}>
       <div className="field">
         <label>Vazifa</label>
         <input
@@ -75,46 +86,53 @@ export function TaskForm({ initial, categories, submitLabel, onSubmit, onCancel 
           placeholder="Masalan: Ertalab yugurish"
           maxLength={200}
           required
+          autoFocus
         />
       </div>
+
       <div className="field">
-        <label>Rejim</label>
-        <select
-          value={draft.scheduleType}
-          onChange={(e) =>
-            setDraft((d) => ({ ...d, scheduleType: e.target.value as ScheduleType }))
-          }
-        >
-          <option value="once">Bir martalik</option>
-          <option value="daily">Har kuni</option>
-          <option value="weekly">Har hafta</option>
-          <option value="monthly">Har oy</option>
-          <option value="range">Sana oralig‘i</option>
-        </select>
+        <label>Takrorlash</label>
+        <div className="schedule-chips" role="group" aria-label="Takrorlash rejimi">
+          {SCHEDULE_OPTS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              className={`schedule-chip${draft.scheduleType === opt.value ? " on" : ""}`}
+              onClick={() => setDraft((d) => ({ ...d, scheduleType: opt.value }))}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <p className="field-hint">{scheduleHint}</p>
       </div>
-      <div className="field">
-        <label>Boshlanish</label>
-        <input
-          type="date"
-          value={draft.startDate}
-          onChange={(e) => setDraft((d) => ({ ...d, startDate: e.target.value }))}
-          required
-        />
-      </div>
-      {(draft.scheduleType === "range" ||
-        draft.scheduleType === "daily" ||
-        draft.scheduleType === "weekly" ||
-        draft.scheduleType === "monthly") && (
+
+      <div className="field-row-2">
         <div className="field">
-          <label>Tugash {draft.scheduleType === "range" ? "(majburiy)" : "(ixtiyoriy)"}</label>
+          <label>Boshlanish</label>
           <input
             type="date"
-            value={draft.endDate}
-            onChange={(e) => setDraft((d) => ({ ...d, endDate: e.target.value }))}
-            required={draft.scheduleType === "range"}
+            value={draft.startDate}
+            onChange={(e) => setDraft((d) => ({ ...d, startDate: e.target.value }))}
+            required
           />
         </div>
-      )}
+        {(draft.scheduleType === "range" ||
+          draft.scheduleType === "daily" ||
+          draft.scheduleType === "weekly" ||
+          draft.scheduleType === "monthly") && (
+          <div className="field">
+            <label>Tugash {draft.scheduleType === "range" ? "" : "(ixt.)"}</label>
+            <input
+              type="date"
+              value={draft.endDate}
+              onChange={(e) => setDraft((d) => ({ ...d, endDate: e.target.value }))}
+              required={draft.scheduleType === "range"}
+            />
+          </div>
+        )}
+      </div>
+
       {draft.scheduleType === "weekly" ? (
         <div className="field">
           <label>Hafta kunlari</label>
@@ -130,8 +148,12 @@ export function TaskForm({ initial, categories, submitLabel, onSubmit, onCancel 
               </button>
             ))}
           </div>
+          {selected.size === 0 ? (
+            <p className="field-hint warn">Kamida bitta kun tanlang</p>
+          ) : null}
         </div>
       ) : null}
+
       <div className="field">
         <label>Kategoriya</label>
         <select
@@ -153,10 +175,15 @@ export function TaskForm({ initial, categories, submitLabel, onSubmit, onCancel 
           onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
           placeholder="Qisqa eslatma…"
           maxLength={1000}
+          rows={2}
         />
       </div>
-      <div className="composer-actions">
-        <button className="btn btn-primary" type="submit" disabled={busy || !draft.title.trim()}>
+      <div className="composer-actions sheet-actions">
+        <button
+          className="btn btn-primary"
+          type="submit"
+          disabled={busy || !draft.title.trim() || (draft.scheduleType === "weekly" && selected.size === 0)}
+        >
           {busy ? "Saqlanmoqda…" : submitLabel}
         </button>
         {onCancel ? (

@@ -41,7 +41,8 @@ export function TaskSheet({
   return (
     <div className="sheet-root" role="dialog" aria-modal="true" aria-label={title}>
       <button className="sheet-backdrop" type="button" aria-label="Yopish" onClick={onClose} />
-      <div className="sheet-panel">
+      <div className="sheet-panel sheet-panel-compact">
+        <div className="sheet-grab" aria-hidden />
         <div className="sheet-head">
           <h3>{title}</h3>
           <button className="icon-btn" type="button" onClick={onClose} aria-label="Yopish">
@@ -49,7 +50,7 @@ export function TaskSheet({
           </button>
         </div>
         <TaskForm
-          key={`${initial.title}-${initial.startDate}-${submitLabel}`}
+          key={`${initial.title}-${initial.startDate}-${initial.scheduleType}-${submitLabel}`}
           initial={initial}
           categories={categories}
           submitLabel={submitLabel}

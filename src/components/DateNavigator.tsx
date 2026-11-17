@@ -10,7 +10,14 @@ import {
   todayIso,
 } from "@/lib/dates";
 
-type DayMeta = { date: string; tone?: string; total?: number };
+type DayMeta = {
+  date: string;
+  tone?: string;
+  total?: number;
+  completed?: number;
+  percent?: number | null;
+  label?: string;
+};
 
 type Props = {
   date: string;
@@ -108,24 +115,32 @@ export function DateNavigator({ date, onChange, dayMeta = [] }: Props) {
               <span key={d}>{d}</span>
             ))}
           </div>
-          <div className="calendar-grid">
-            {cells.map((cell, idx) =>
-              cell ? (
+          <div className="calendar-grid calendar-grid-rich">
+            {cells.map((cell, idx) => {
+              if (!cell) return <span key={`e-${idx}`} className="calendar-empty" />;
+              const meta = metaMap.get(cell);
+              const total = meta?.total ?? 0;
+              const label =
+                total > 0
+                  ? meta?.percent != null
+                    ? `${meta.percent}%`
+                    : `${meta?.completed ?? 0}/${total}`
+                  : null;
+              return (
                 <button
                   key={cell}
                   type="button"
-                  className={`calendar-day${cell === date ? " selected" : ""}${cell === today ? " is-today" : ""}${
-                    metaMap.get(cell)?.tone ? ` tone-${metaMap.get(cell)!.tone}` : ""
+                  className={`calendar-day rich${cell === date ? " selected" : ""}${cell === today ? " is-today" : ""}${
+                    meta?.tone ? ` tone-${meta.tone}` : ""
                   }`}
                   onClick={() => pick(cell)}
+                  title={total > 0 ? `${cell}: ${meta?.completed ?? 0}/${total}` : cell}
                 >
-                  {Number(cell.slice(-2))}
-                  {(metaMap.get(cell)?.total ?? 0) > 0 ? <div className="dot" /> : null}
+                  <span className="cal-num">{Number(cell.slice(-2))}</span>
+                  {label ? <span className="cal-pct">{label}</span> : <span className="cal-pct muted-dot">·</span>}
                 </button>
-              ) : (
-                <span key={`e-${idx}`} className="calendar-empty" />
-              ),
-            )}
+              );
+            })}
           </div>
         </div>
       ) : null}
