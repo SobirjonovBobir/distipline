@@ -944,6 +944,27 @@ body:has(.offline-banner) .app-frame {
 .focus-hist.aborted { opacity: 0.75; }
 .focus-main-btn { min-width: 120px; }
 
+.privacy-mask {
+  filter: blur(6px);
+  user-select: none;
+  -webkit-user-select: none;
+  letter-spacing: 0.04em;
+}
+.personal-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.eye-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-shrink: 0;
+}
+.personal-cash-form { margin-bottom: 0.35rem; }
+.cash-compact .cash-month-row { margin-bottom: 0.45rem; }
+
 .toast {
   bottom: calc(4.75rem + env(safe-area-inset-bottom));
 }
@@ -1022,6 +1043,8 @@ body:has(.offline-banner) .app-frame {
   .focus-clock { font-size: clamp(2.8rem, 16vw, 4rem); }
   .focus-actions { gap: 0.45rem; }
   .focus-actions .btn { min-height: 44px; flex: 1 1 auto; }
+  .view-personal .page-head p { display: none; }
+  .eye-toggle { min-height: 44px; }
   .task-item, .more-item, .check, .btn, .upcoming-row, .journal-item { touch-action: manipulation; }
   .task-item {
     padding: 0.7rem 0.75rem;
