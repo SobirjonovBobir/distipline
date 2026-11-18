@@ -2,6 +2,9 @@
   "name": "distipline",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "next dev --port 3000",
     "build": "next build && node scripts/migrate.mjs",
