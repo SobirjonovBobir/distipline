@@ -1,4 +1,5 @@
 import { sql } from "./db";
+import { PERSONAL_CATEGORY_NAME } from "./personal";
 
 export type CashCategory = {
   id: string;
@@ -15,6 +16,7 @@ export const DEFAULT_CASH_CATEGORIES = [
   { name: "Ta’lim", color: "#5b4b8a", kind: "expense" as const },
   { name: "Salomatlik", color: "#c6473a", kind: "expense" as const },
   { name: "Dam olish", color: "#3a7ca5", kind: "expense" as const },
+  { name: PERSONAL_CATEGORY_NAME, color: "#5b4b8a", kind: "both" as const },
   { name: "Maosh", color: "#2f7a55", kind: "income" as const },
   { name: "Boshqa", color: "#6b7280", kind: "both" as const },
 ];
@@ -41,17 +43,43 @@ export async function ensureDefaultCashCategories(userId: string) {
     "select id from cash_categories where user_id = $1 limit 1",
     [userId],
   );
-  if (existing.length > 0) return;
-  let order = 1;
-  for (const cat of DEFAULT_CASH_CATEGORIES) {
-    await sql(
-      `insert into cash_categories (id, user_id, name, color, kind, sort_order)
-       values ($1,$2,$3,$4,$5,$6)
-       on conflict (user_id, name) do nothing`,
-      [crypto.randomUUID(), userId, cat.name, cat.color, cat.kind, order],
-    );
-    order += 1;
+  if (existing.length === 0) {
+    let order = 1;
+    for (const cat of DEFAULT_CASH_CATEGORIES) {
+      await sql(
+        `insert into cash_categories (id, user_id, name, color, kind, sort_order)
+         values ($1,$2,$3,$4,$5,$6)
+         on conflict (user_id, name) do nothing`,
+        [crypto.randomUUID(), userId, cat.name, cat.color, cat.kind, order],
+      );
+      order += 1;
+    }
+    return;
   }
+  await ensurePersonalCashCategory(userId);
+}
+
+/** Idempotent: add cash category "Shaxsiy" for existing users without wiping data. */
+export async function ensurePersonalCashCategory(userId: string) {
+  const found = await sql<{ id: string }>(
+    `select id from cash_categories
+     where user_id = $1 and lower(trim(name)) = lower($2)
+     limit 1`,
+    [userId, PERSONAL_CATEGORY_NAME],
+  );
+  if (found.length > 0) return found[0].id;
+  const orderRows = await sql<{ max: number | null }>(
+    "select max(sort_order) as max from cash_categories where user_id = $1",
+    [userId],
+  );
+  const id = crypto.randomUUID();
+  await sql(
+    `insert into cash_categories (id, user_id, name, color, kind, sort_order)
+     values ($1,$2,$3,$4,$5,$6)
+     on conflict (user_id, name) do nothing`,
+    [id, userId, PERSONAL_CATEGORY_NAME, "#5b4b8a", "both", (orderRows[0]?.max ?? 0) + 1],
+  );
+  return id;
 }
 
 export async function listCashCategories(userId: string): Promise<CashCategory[]> {

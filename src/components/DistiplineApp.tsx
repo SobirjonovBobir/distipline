@@ -16,6 +16,7 @@ import {
   todayIso,
 } from "@/lib/dates";
 import { t } from "@/lib/i18n";
+import { isPersonalCategoryName, privacyText } from "@/lib/personal";
 import { scheduleLabelUz, type ScheduleType } from "@/lib/schedule";
 
 type View =
@@ -27,6 +28,7 @@ type View =
   | "achievements"
   | "journal"
   | "focus"
+  | "personal"
   | "cash"
   | "insights"
   | "settings"
@@ -78,6 +80,7 @@ type Settings = {
   notifyFocus: boolean;
   notifyJournal: boolean;
   defaultPriority: string;
+  hidePersonal: boolean;
 };
 
 const DEFAULT_SETTINGS: Settings = {
@@ -92,6 +95,7 @@ const DEFAULT_SETTINGS: Settings = {
   notifyFocus: true,
   notifyJournal: false,
   defaultPriority: "normal",
+  hidePersonal: true,
 };
 
 function applyTheme(theme: string) {
@@ -139,20 +143,30 @@ const NAV_IDS: { id: View; ico: string }[] = [
   { id: "achievements", ico: "★" },
   { id: "journal", ico: "✎" },
   { id: "focus", ico: "⏱" },
+  { id: "personal", ico: "◉" },
   { id: "settings", ico: "⚙" },
 ];
 
 const MOBILE_PRIMARY: View[] = ["home", "tasks", "calendar", "stats", "more"];
-const MORE_ITEMS: View[] = ["cash", "insights", "goals", "focus", "journal", "achievements", "settings"];
+const MORE_ITEMS: View[] = [
+  "personal",
+  "cash",
+  "insights",
+  "goals",
+  "focus",
+  "journal",
+  "achievements",
+  "settings",
+];
 
-function emptyDraft(date: string): TaskDraft {
+function emptyDraft(date: string, categoryId = ""): TaskDraft {
   return {
     title: "",
     scheduleType: "once",
     startDate: date,
     endDate: date,
     weekdays: "",
-    categoryId: "",
+    categoryId,
     notes: "",
   };
 }
@@ -220,10 +234,14 @@ export function DistiplineApp() {
   const [journalMoodFilter, setJournalMoodFilter] = useState("");
   const [timerMode, setTimerMode] = useState<"pomodoro" | "break">("pomodoro");
   const [timerRunning, setTimerRunning] = useState(false);
+  const [timerPaused, setTimerPaused] = useState(false);
   const [timerLeft, setTimerLeft] = useState(25 * 60);
   const [timerElapsed, setTimerElapsed] = useState(0);
   const [focusBgNote, setFocusBgNote] = useState("");
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  /** Absolute end time (ms) while running — survives tab throttle better than tick counters. */
+  const timerDeadlineRef = useRef<number | null>(null);
+  const timerNotifyFiredRef = useRef(false);
 
   const today = todayIso();
   const isToday = selectedDate === today;
@@ -298,9 +316,7 @@ export function DistiplineApp() {
       const f = await focusRes.json();
       setFocusSessions(f.sessions ?? []);
       setFocusTotals(f.totals ?? { seconds: 0, count: 0 });
-      if (f.settings?.workMinutes && !timerRunning) {
-        setTimerLeft((f.settings.workMinutes || 25) * 60);
-      }
+      // Never reset an in-progress/paused timer from settings reload (pause bug).
     }
     if (jour.ok) {
       const j = await jour.json();
@@ -317,7 +333,7 @@ export function DistiplineApp() {
     }
     const list = await fetch("/api/journal");
     if (list.ok) setJournalList((await list.json()).entries ?? []);
-  }, [timerRunning]);
+  }, []);
 
   const bootstrap = useCallback(async () => {
     try {
@@ -397,33 +413,77 @@ export function DistiplineApp() {
     flash("Sozlama saqlandi");
   }
 
+  function plannedSecondsForMode(mode: "pomodoro" | "break" = timerMode) {
+    return (
+      (mode === "break" ? settings?.focusBreakMinutes || 5 : settings?.focusWorkMinutes || 25) * 60
+    );
+  }
+
+  function syncTimerFromDeadline() {
+    const deadline = timerDeadlineRef.current;
+    if (deadline == null) return;
+    const planned = plannedSecondsForMode();
+    const left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    setTimerLeft(left);
+    setTimerElapsed(Math.min(planned, Math.max(0, planned - left)));
+    if (left <= 0) {
+      timerDeadlineRef.current = null;
+      setTimerRunning(false);
+      setTimerPaused(false);
+      setFocusBgNote("");
+      if (!timerNotifyFiredRef.current && settings.notifyFocus) {
+        timerNotifyFiredRef.current = true;
+        sendLocalNotify("Discipline · Focus", "Sessiya tugadi — saqlashni unutmang.");
+        flash("Focus vaqti tugadi");
+      }
+    }
+  }
+
+  function startOrResumeTimer() {
+    const left = Math.max(1, timerLeft || plannedSecondsForMode());
+    timerDeadlineRef.current = Date.now() + left * 1000;
+    timerNotifyFiredRef.current = false;
+    setTimerPaused(false);
+    setTimerRunning(true);
+  }
+
+  function pauseTimer() {
+    syncTimerFromDeadline();
+    timerDeadlineRef.current = null;
+    setTimerRunning(false);
+    setTimerPaused(true);
+    setFocusBgNote("");
+  }
+
+  function resetTimer(mode: "pomodoro" | "break" = timerMode) {
+    timerDeadlineRef.current = null;
+    timerNotifyFiredRef.current = false;
+    setTimerRunning(false);
+    setTimerPaused(false);
+    setTimerElapsed(0);
+    setTimerLeft(plannedSecondsForMode(mode));
+    setFocusBgNote("");
+  }
+
   useEffect(() => {
     if (!timerRunning) return;
-    const id = window.setInterval(() => {
-      setTimerLeft((v) => {
-        if (v <= 1) {
-          window.clearInterval(id);
-          setTimerRunning(false);
-          setFocusBgNote("");
-          if (settings.notifyFocus) {
-            sendLocalNotify("Discipline · Focus", "Sessiya tugadi — saqlashni unutmang.");
-            flash("Focus vaqti tugadi");
-          }
-          return 0;
-        }
-        return v - 1;
-      });
-      setTimerElapsed((v) => v + 1);
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [timerRunning, settings.notifyFocus]); // eslint-disable-line react-hooks/exhaustive-deps
+    syncTimerFromDeadline();
+    const id = window.setInterval(() => syncTimerFromDeadline(), 250);
+    const onVis = () => {
+      if (document.visibilityState === "visible") syncTimerFromDeadline();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [timerRunning, settings.notifyFocus, timerMode, settings.focusWorkMinutes, settings.focusBreakMinutes]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Best-effort Screen Wake Lock + visibility note while Focus runs
   useEffect(() => {
     if (!timerRunning) {
       void wakeLockRef.current?.release().catch(() => undefined);
       wakeLockRef.current = null;
-      setFocusBgNote("");
       return;
     }
     let cancelled = false;
@@ -449,7 +509,10 @@ export function DistiplineApp() {
     }
     void requestLock();
     const onVis = () => {
-      if (document.visibilityState === "visible" && timerRunning) void requestLock();
+      if (document.visibilityState === "visible" && timerRunning) {
+        syncTimerFromDeadline();
+        void requestLock();
+      }
     };
     document.addEventListener("visibilitychange", onVis);
     return () => {
@@ -458,10 +521,28 @@ export function DistiplineApp() {
       void wakeLockRef.current?.release().catch(() => undefined);
       wakeLockRef.current = null;
     };
-  }, [timerRunning]);
+  }, [timerRunning]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const isPersonalTask = useCallback(
+    (task: Task) =>
+      isPersonalCategoryName(task.categoryName) ||
+      categories.some((c) => c.id === task.categoryId && isPersonalCategoryName(c.name)),
+    [categories],
+  );
+
+  const publicCategories = useMemo(
+    () => categories.filter((c) => !isPersonalCategoryName(c.name)),
+    [categories],
+  );
+
+  const personalCategory = useMemo(
+    () => categories.find((c) => isPersonalCategoryName(c.name)) ?? null,
+    [categories],
+  );
 
   const filtered = useMemo(() => {
-    let list = [...tasks];
+    // Normal task lists never mix in Shaxsiy — those live only in Personal section.
+    let list = tasks.filter((task) => !isPersonalTask(task));
     if (query.trim()) {
       const q = query.trim().toLowerCase();
       list = list.filter((t) => t.title.toLowerCase().includes(q) || t.notes.toLowerCase().includes(q));
@@ -473,7 +554,20 @@ export function DistiplineApp() {
     if (sortMode === "name") list.sort((a, b) => a.title.localeCompare(b.title, "uz"));
     if (sortMode === "status") list.sort((a, b) => Number(a.done) - Number(b.done));
     return list;
-  }, [tasks, query, categoryFilter, scheduleFilter, statusFilter, sortMode]);
+  }, [tasks, query, categoryFilter, scheduleFilter, statusFilter, sortMode, isPersonalTask]);
+
+  const personalFiltered = useMemo(() => {
+    let list = tasks.filter((task) => isPersonalTask(task));
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      list = list.filter((t) => t.title.toLowerCase().includes(q) || t.notes.toLowerCase().includes(q));
+    }
+    if (statusFilter === "open") list = list.filter((t) => !t.done);
+    if (statusFilter === "done") list = list.filter((t) => t.done);
+    if (sortMode === "name") list.sort((a, b) => a.title.localeCompare(b.title, "uz"));
+    if (sortMode === "status") list.sort((a, b) => Number(a.done) - Number(b.done));
+    return list;
+  }, [tasks, query, statusFilter, sortMode, isPersonalTask]);
 
   const journalFiltered = useMemo(() => {
     let list = [...journalList];
@@ -495,12 +589,17 @@ export function DistiplineApp() {
     return weekDays
       .filter((d) => d.date >= tomorrow)
       .slice(0, 3)
-      .map((d) => ({
-        ...d,
-        openTasks: d.tasks.filter((t) => !t.done),
-      }))
-      .filter((d) => d.openTasks.length > 0 || d.tasks.length > 0);
-  }, [weekDays, today]);
+      .map((d) => {
+        const publicTasks = d.tasks.filter((t) => !isPersonalTask(t));
+        return {
+          ...d,
+          // List UI: hide Shaxsiy titles; progress counts stay from API (includes personal).
+          openTasks: publicTasks.filter((t) => !t.done),
+          publicCount: publicTasks.length,
+        };
+      })
+      .filter((d) => d.publicCount > 0 || d.tasks.length > 0);
+  }, [weekDays, today, isPersonalTask]);
 
   async function refreshAll() {
     await loadTasks(selectedDate);
@@ -624,8 +723,8 @@ export function DistiplineApp() {
   }
 
   async function saveFocus(status: "completed" | "aborted") {
-    const planned =
-      (timerMode === "break" ? settings?.focusBreakMinutes || 5 : settings?.focusWorkMinutes || 25) * 60;
+    if (timerRunning) syncTimerFromDeadline();
+    const planned = plannedSecondsForMode();
     const elapsed = status === "completed" && timerLeft === 0 ? planned : timerElapsed;
     if (elapsed < 5) {
       flash("Sessiya juda qisqa");
@@ -643,9 +742,7 @@ export function DistiplineApp() {
     });
     if (res.ok) {
       flash(status === "completed" ? "Focus sessiyasi saqlandi" : "Sessiya to‘xtatildi");
-      setTimerRunning(false);
-      setTimerElapsed(0);
-      setTimerLeft(planned);
+      resetTimer(timerMode);
       await loadShared(selectedDate);
     }
   }
@@ -693,6 +790,7 @@ export function DistiplineApp() {
     achievements: { h: t(locale, "title.achievements"), p: t(locale, "desc.achievements") },
     journal: { h: t(locale, "title.journal"), p: t(locale, "desc.journal") },
     focus: { h: t(locale, "title.focus"), p: t(locale, "desc.focus") },
+    personal: { h: t(locale, "title.personal"), p: t(locale, "desc.personal") },
     cash: { h: t(locale, "title.cash"), p: t(locale, "desc.cash") },
     insights: { h: t(locale, "title.insights"), p: t(locale, "desc.insights") },
     settings: { h: t(locale, "title.settings"), p: t(locale, "desc.settings") },
@@ -710,14 +808,17 @@ export function DistiplineApp() {
     setMoreOpen(false);
   }
 
-  function renderTask(task: Task, overdue = false) {
+  function renderTask(task: Task, overdue = false, opts?: { mask?: boolean }) {
+    const mask = !!opts?.mask && settings.hidePersonal;
     return (
       <li key={`${task.id}-${task.occurrenceDate}`} className={`task-item${task.done ? " done" : ""}${overdue ? " overdue" : ""}`}>
         <button className="check" type="button" onClick={() => void toggleTask(task)} aria-label="Belgilash">
           ✓
         </button>
         <div>
-          <p className="task-title">{task.title}</p>
+          <p className={`task-title${mask ? " privacy-mask" : ""}`}>
+            {mask ? privacyText(task.title, true) : task.title}
+          </p>
           <div className="task-meta">
             <span className="meta-pill">
               {scheduleLabelUz({
@@ -740,6 +841,11 @@ export function DistiplineApp() {
               </span>
             ) : null}
           </div>
+          {task.notes ? (
+            <p className={`muted${mask ? " privacy-mask" : ""}`} style={{ margin: "0.25rem 0 0", fontSize: "0.82rem" }}>
+              {mask ? privacyText(task.notes, true, "········") : task.notes}
+            </p>
+          ) : null}
           <div className="row-actions" style={{ marginTop: "0.4rem" }}>
             <button className="btn btn-ghost" type="button" onClick={() => setEditing(task)}>
               Tahrirlash
@@ -760,6 +866,8 @@ export function DistiplineApp() {
 
   const open = filtered.filter((t) => !t.done);
   const done = filtered.filter((t) => t.done);
+  const personalOpen = personalFiltered.filter((t) => !t.done);
+  const personalDone = personalFiltered.filter((t) => t.done);
 
   const mobileNavActive = (id: View) => {
     if (id === "more") return MORE_ITEMS.includes(view) || moreOpen;
@@ -974,7 +1082,7 @@ export function DistiplineApp() {
                           <strong>{describeUzbekDate(d.date).weekdayTitle}</strong>
                           <span className="muted"> · {d.date.slice(5)}</span>
                           <p className="muted" style={{ margin: "0.15rem 0 0" }}>
-                            {d.openTasks.length || d.tasks.length} vazifa
+                            {d.publicCount || d.tasks.length} vazifa
                             {d.openTasks[0] ? ` · ${d.openTasks[0].title}` : ""}
                           </p>
                         </div>
@@ -1064,11 +1172,14 @@ export function DistiplineApp() {
                 ))}
               </div>
 
+              <p className="muted" style={{ margin: "0 0 0.55rem", fontSize: "0.8rem" }}>
+                Shaxsiy (kategoriya) vazifalar → Ko‘proq · Shaxsiy
+              </p>
               <div className="filters filters-tasks">
                 <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Qidiruv…" />
                 <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
                   <option value="">Barcha kategoriyalar</option>
-                  {categories.map((c) => (
+                  {publicCategories.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
@@ -1512,7 +1623,116 @@ export function DistiplineApp() {
             </div>
           ) : null}
 
-          {view === "cash" ? <CashControl onFlash={flash} /> : null}
+          {view === "cash" ? <CashControl onFlash={flash} listMode="normal" /> : null}
+
+          {view === "personal" ? (
+            <div className="personal-vault mobile-personal">
+              <div className="card personal-head">
+                <div className="personal-head-row">
+                  <div>
+                    <h3 style={{ margin: 0 }}>{t(locale, "title.personal")}</h3>
+                    <p className="muted" style={{ margin: "0.25rem 0 0" }}>
+                      {t(locale, "personal.statsNote")}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-ghost eye-toggle"
+                    aria-pressed={!settings.hidePersonal}
+                    aria-label={
+                      settings.hidePersonal ? t(locale, "personal.show") : t(locale, "personal.hide")
+                    }
+                    title={
+                      settings.hidePersonal ? t(locale, "personal.show") : t(locale, "personal.hide")
+                    }
+                    onClick={() => void patchSettings({ hidePersonal: !settings.hidePersonal })}
+                  >
+                    <span aria-hidden>{settings.hidePersonal ? "👁‍🗨" : "👁"}</span>
+                    <span>{settings.hidePersonal ? t(locale, "personal.show") : t(locale, "personal.hide")}</span>
+                  </button>
+                </div>
+                {settings.hidePersonal ? (
+                  <p className="muted" style={{ margin: "0.55rem 0 0", fontSize: "0.82rem" }}>
+                    {t(locale, "personal.hiddenHint")}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="card" style={{ marginTop: "0.75rem" }}>
+                <div className="tasks-progress-row">
+                  <div>
+                    <h3 style={{ margin: 0 }}>{t(locale, "personal.tasks")}</h3>
+                    <p className="muted" style={{ margin: "0.2rem 0 0" }}>
+                      {personalFiltered.filter((x) => x.done).length}/{personalFiltered.length} ·{" "}
+                      {selectedDate}
+                    </p>
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    type="button"
+                    onClick={() => {
+                      setShowCreate(true);
+                    }}
+                  >
+                    + Yangi
+                  </button>
+                </div>
+                <DateNavigator date={selectedDate} onChange={setSelectedDate} dayMeta={calDays} />
+                <div className="filter-chips" role="group" aria-label="Holat filtri" style={{ marginTop: "0.55rem" }}>
+                  {(
+                    [
+                      ["all", "Hammasi"],
+                      ["open", "Ochiq"],
+                      ["done", "Bajarilgan"],
+                    ] as const
+                  ).map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`filter-chip${statusFilter === id ? " on" : ""}`}
+                      onClick={() => setStatusFilter(id)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                {personalFiltered.length === 0 ? (
+                  <div className="empty-state">
+                    <strong>{t(locale, "personal.emptyTasks")}</strong>
+                    <p>{t(locale, "personal.emptyTasksHint")}</p>
+                  </div>
+                ) : (
+                  <>
+                    {statusFilter !== "done" && personalOpen.length > 0 ? (
+                      <ul className="task-list">
+                        {personalOpen.map((task) =>
+                          renderTask(task, selectedDate < today, { mask: true }),
+                        )}
+                      </ul>
+                    ) : null}
+                    {statusFilter !== "open" && personalDone.length > 0 ? (
+                      <>
+                        {statusFilter === "all" ? <h3 className="section-title">Bajarilgan</h3> : null}
+                        <ul className="task-list">
+                          {personalDone.map((task) => renderTask(task, false, { mask: true }))}
+                        </ul>
+                      </>
+                    ) : null}
+                  </>
+                )}
+              </div>
+
+              <div style={{ marginTop: "0.75rem" }}>
+                <h3 className="section-title">{t(locale, "personal.cash")}</h3>
+                <CashControl
+                  onFlash={flash}
+                  listMode="personal"
+                  maskSensitive={settings.hidePersonal}
+                  compact
+                />
+              </div>
+            </div>
+          ) : null}
 
           {view === "achievements" ? (
             <div className="card">
@@ -1623,9 +1843,7 @@ export function DistiplineApp() {
                     type="button"
                     onClick={() => {
                       setTimerMode("pomodoro");
-                      setTimerRunning(false);
-                      setTimerElapsed(0);
-                      setTimerLeft((settings?.focusWorkMinutes || 25) * 60);
+                      resetTimer("pomodoro");
                     }}
                   >
                     Ish · {settings?.focusWorkMinutes || 25}d
@@ -1635,9 +1853,7 @@ export function DistiplineApp() {
                     type="button"
                     onClick={() => {
                       setTimerMode("break");
-                      setTimerRunning(false);
-                      setTimerElapsed(0);
-                      setTimerLeft((settings?.focusBreakMinutes || 5) * 60);
+                      resetTimer("break");
                     }}
                   >
                     Tanaffus · {settings?.focusBreakMinutes || 5}d
@@ -1651,14 +1867,7 @@ export function DistiplineApp() {
                       width: `${Math.min(
                         100,
                         Math.round(
-                          (timerElapsed /
-                            Math.max(
-                              1,
-                              (timerMode === "break"
-                                ? settings?.focusBreakMinutes || 5
-                                : settings?.focusWorkMinutes || 25) * 60,
-                            )) *
-                            100,
+                          (timerElapsed / Math.max(1, plannedSecondsForMode())) * 100,
                         ),
                       )}%`,
                     }}
@@ -1674,13 +1883,13 @@ export function DistiplineApp() {
                           const p = await requestBrowserNotifyPermission();
                           setNotifyPerm(p);
                         }
-                        setTimerRunning(true);
+                        startOrResumeTimer();
                       }}
                     >
-                      Boshlash
+                      {timerPaused || timerElapsed > 0 ? "Davom etish" : "Boshlash"}
                     </button>
                   ) : (
-                    <button className="btn btn-ghost focus-main-btn" type="button" onClick={() => setTimerRunning(false)}>
+                    <button className="btn btn-ghost focus-main-btn" type="button" onClick={() => pauseTimer()}>
                       Pauza
                     </button>
                   )}
@@ -1694,15 +1903,7 @@ export function DistiplineApp() {
                   <button
                     className="btn btn-ghost"
                     type="button"
-                    onClick={() => {
-                      setTimerRunning(false);
-                      setTimerElapsed(0);
-                      setTimerLeft(
-                        (timerMode === "break"
-                          ? settings?.focusBreakMinutes || 5
-                          : settings?.focusWorkMinutes || 25) * 60,
-                      );
-                    }}
+                    onClick={() => resetTimer(timerMode)}
                   >
                     Reset
                   </button>
@@ -2160,11 +2361,20 @@ export function DistiplineApp() {
 
       <TaskSheet
         open={showCreate}
-        title="Yangi vazifa"
-        initial={emptyDraft(selectedDate)}
-        categories={categories}
+        title={view === "personal" ? "Shaxsiy vazifa" : "Yangi vazifa"}
+        initial={emptyDraft(
+          selectedDate,
+          view === "personal" ? personalCategory?.id || "" : "",
+        )}
+        categories={view === "personal" ? categories.filter((c) => isPersonalCategoryName(c.name)) : publicCategories}
         submitLabel="Qo‘shish"
-        onSubmit={createTask}
+        onSubmit={async (draft) => {
+          const next =
+            view === "personal"
+              ? { ...draft, categoryId: draft.categoryId || personalCategory?.id || "" }
+              : draft;
+          await createTask(next);
+        }}
         onClose={() => setShowCreate(false)}
       />
       <TaskSheet
@@ -2183,7 +2393,11 @@ export function DistiplineApp() {
               }
             : emptyDraft(selectedDate)
         }
-        categories={categories}
+        categories={
+          editing && isPersonalTask(editing)
+            ? categories.filter((c) => isPersonalCategoryName(c.name))
+            : publicCategories
+        }
         submitLabel="Saqlash"
         onSubmit={saveEdit}
         onClose={() => setEditing(null)}

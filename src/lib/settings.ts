@@ -13,6 +13,8 @@ export type UserSettings = {
   notifyFocus: boolean;
   notifyJournal: boolean;
   defaultPriority: string;
+  /** When true, personal (Shaxsiy) titles/notes/amounts are masked in the vault UI. */
+  hidePersonal: boolean;
 };
 
 export const SETTINGS_DEFAULTS: UserSettings = {
@@ -27,6 +29,7 @@ export const SETTINGS_DEFAULTS: UserSettings = {
   notifyFocus: true,
   notifyJournal: false,
   defaultPriority: "normal",
+  hidePersonal: true,
 };
 
 type Row = {
@@ -41,6 +44,7 @@ type Row = {
   notify_focus?: boolean;
   notify_journal?: boolean;
   default_priority?: string;
+  hide_personal?: boolean;
 };
 
 function mapRow(r: Row): UserSettings {
@@ -56,6 +60,7 @@ function mapRow(r: Row): UserSettings {
     notifyFocus: r.notify_focus !== false,
     notifyJournal: !!r.notify_journal,
     defaultPriority: r.default_priority || "normal",
+    hidePersonal: r.hide_personal !== false,
   };
 }
 
@@ -83,8 +88,9 @@ export async function updateSettings(userId: string, patch: Partial<UserSettings
   await sql(
     `insert into user_settings (
        user_id, theme, density, week_starts_on, focus_work_minutes, focus_break_minutes,
-       locale, timezone, notify_incomplete, notify_focus, notify_journal, default_priority, updated_at
-     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,now())
+       locale, timezone, notify_incomplete, notify_focus, notify_journal, default_priority,
+       hide_personal, updated_at
+     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,now())
      on conflict (user_id) do update set
        theme = excluded.theme,
        density = excluded.density,
@@ -97,6 +103,7 @@ export async function updateSettings(userId: string, patch: Partial<UserSettings
        notify_focus = excluded.notify_focus,
        notify_journal = excluded.notify_journal,
        default_priority = excluded.default_priority,
+       hide_personal = excluded.hide_personal,
        updated_at = now()`,
     [
       userId,
@@ -111,6 +118,7 @@ export async function updateSettings(userId: string, patch: Partial<UserSettings
       next.notifyFocus,
       next.notifyJournal,
       next.defaultPriority,
+      next.hidePersonal,
     ],
   );
   return next;

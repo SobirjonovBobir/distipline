@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { todayIso } from "@/lib/dates";
+import { isPersonalCategoryName, PERSONAL_CATEGORY_NAME, privacyText } from "@/lib/personal";
 
 type CashCat = { id: string; name: string; color: string; kind: string };
 
@@ -41,7 +42,22 @@ function money(n: number) {
   return new Intl.NumberFormat("uz-UZ", { maximumFractionDigits: 0 }).format(Math.round(n));
 }
 
-export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
+type Props = {
+  onFlash: (msg: string) => void;
+  /** "normal" hides Shaxsiy items from lists; "personal" shows only Shaxsiy. Totals stay full. */
+  listMode?: "normal" | "personal";
+  /** Mask sensitive text (titles, notes, amounts) in list UIs. */
+  maskSensitive?: boolean;
+  /** Compact layout for embedding inside Shaxsiy section. */
+  compact?: boolean;
+};
+
+export function CashControl({
+  onFlash,
+  listMode = "normal",
+  maskSensitive = false,
+  compact = false,
+}: Props) {
   const [month, setMonth] = useState(todayIso().slice(0, 7));
   const [summary, setSummary] = useState<Summary | null>(null);
   const [txs, setTxs] = useState<Tx[]>([]);
@@ -50,14 +66,18 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
   const [loading, setLoading] = useState(true);
   const [kind, setKind] = useState<"income" | "expense">("expense");
   const [amount, setAmount] = useState("");
-  const [category, setCategory] = useState("Oziq-ovqat");
+  const [category, setCategory] = useState(
+    listMode === "personal" ? PERSONAL_CATEGORY_NAME : "Oziq-ovqat",
+  );
   const [note, setNote] = useState("");
   const [date, setDate] = useState(todayIso());
   const [budgetCat, setBudgetCat] = useState("Oziq-ovqat");
   const [budgetLimit, setBudgetLimit] = useState("");
   const [savingTitle, setSavingTitle] = useState("");
   const [savingTarget, setSavingTarget] = useState("");
-  const [tab, setTab] = useState<"overview" | "history" | "budget" | "savings">("overview");
+  const [tab, setTab] = useState<"overview" | "history" | "budget" | "savings">(
+    listMode === "personal" ? "history" : "overview",
+  );
   const [categories, setCategories] = useState<CashCat[]>([]);
   const [historyQuery, setHistoryQuery] = useState("");
   const [historyKind, setHistoryKind] = useState<"" | "income" | "expense">("");
@@ -81,36 +101,69 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
       if (catRes.ok) {
         const cats = ((await catRes.json()).categories ?? []) as CashCat[];
         setCategories(cats);
-        if (cats.length > 0) {
-          setCategory((prev) => (cats.some((c) => c.name === prev) ? prev : cats[0].name));
-          setBudgetCat((prev) => (cats.some((c) => c.name === prev) ? prev : cats[0].name));
+        if (listMode === "personal") {
+          setCategory(PERSONAL_CATEGORY_NAME);
+        } else if (cats.length > 0) {
+          setCategory((prev) =>
+            isPersonalCategoryName(prev)
+              ? cats.find((c) => !isPersonalCategoryName(c.name))?.name || cats[0].name
+              : cats.some((c) => c.name === prev)
+                ? prev
+                : cats.find((c) => !isPersonalCategoryName(c.name))?.name || cats[0].name,
+          );
+          setBudgetCat((prev) =>
+            isPersonalCategoryName(prev)
+              ? cats.find((c) => !isPersonalCategoryName(c.name))?.name || cats[0].name
+              : cats.some((c) => c.name === prev)
+                ? prev
+                : cats.find((c) => !isPersonalCategoryName(c.name))?.name || cats[0].name,
+          );
         }
       }
     } finally {
       setLoading(false);
     }
-  }, [month, onFlash]);
+  }, [month, onFlash, listMode]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   const categoryOptions = useMemo(() => {
-    if (categories.length === 0) {
-      return ["Oziq-ovqat", "Transport", "Uy", "Ta’lim", "Salomatlik", "Dam olish", "Maosh", "Boshqa"];
-    }
-    return categories
-      .filter((c) => c.kind === "both" || c.kind === kind)
-      .map((c) => c.name);
-  }, [categories, kind]);
+    if (listMode === "personal") return [PERSONAL_CATEGORY_NAME];
+    const base =
+      categories.length === 0
+        ? ["Oziq-ovqat", "Transport", "Uy", "Ta’lim", "Salomatlik", "Dam olish", "Maosh", "Boshqa"]
+        : categories
+            .filter((c) => c.kind === "both" || c.kind === kind)
+            .map((c) => c.name);
+    return base.filter((name) => !isPersonalCategoryName(name));
+  }, [categories, kind, listMode]);
 
-  const allCategoryNames = useMemo(
-    () =>
+  const allCategoryNames = useMemo(() => {
+    if (listMode === "personal") return [PERSONAL_CATEGORY_NAME];
+    const names =
       categories.length > 0
         ? categories.map((c) => c.name)
-        : ["Oziq-ovqat", "Transport", "Uy", "Ta’lim", "Salomatlik", "Dam olish", "Maosh", "Boshqa"],
-    [categories],
-  );
+        : ["Oziq-ovqat", "Transport", "Uy", "Ta’lim", "Salomatlik", "Dam olish", "Maosh", "Boshqa"];
+    return names.filter((name) => !isPersonalCategoryName(name));
+  }, [categories, listMode]);
+
+  const visibleTxs = useMemo(() => {
+    if (listMode === "personal") return txs.filter((t) => isPersonalCategoryName(t.category));
+    return txs.filter((t) => !isPersonalCategoryName(t.category));
+  }, [txs, listMode]);
+
+  const visibleBudgets = useMemo(() => {
+    if (listMode === "personal") return budgets.filter((b) => isPersonalCategoryName(b.category));
+    return budgets.filter((b) => !isPersonalCategoryName(b.category));
+  }, [budgets, listMode]);
+
+  const visibleByCategory = useMemo(() => {
+    const list = summary?.byCategory || [];
+    if (listMode === "personal") return list.filter((c) => isPersonalCategoryName(c.category));
+    return list.filter((c) => !isPersonalCategoryName(c.category));
+  }, [summary, listMode]);
 
   const maxTrend = useMemo(() => {
     const vals = (summary?.trend || []).flatMap((t) => [t.income, t.expense]);
@@ -118,7 +171,7 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
   }, [summary]);
 
   const filteredTxs = useMemo(() => {
-    let list = [...txs];
+    let list = [...visibleTxs];
     if (historyKind) list = list.filter((t) => t.kind === historyKind);
     if (historyQuery.trim()) {
       const q = historyQuery.trim().toLowerCase();
@@ -130,10 +183,19 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
       );
     }
     return list;
-  }, [txs, historyKind, historyQuery]);
+  }, [visibleTxs, historyKind, historyQuery]);
+
+  function displayAmount(n: number) {
+    return maskSensitive ? privacyText(money(n), true) : money(n);
+  }
+
+  function displayNote(text: string) {
+    return maskSensitive ? privacyText(text, true, "········") : text;
+  }
 
   async function addTx(e: FormEvent) {
     e.preventDefault();
+    const cat = listMode === "personal" ? PERSONAL_CATEGORY_NAME : category;
     const res = await fetch("/api/cash", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -141,7 +203,7 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
         action: "transaction",
         kind,
         amount: Number(amount),
-        category,
+        category: cat,
         note,
         occurredOn: date,
       }),
@@ -156,28 +218,36 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
     await load();
   }
 
+  const showTabs = !compact;
+  const showOverview = !compact && tab === "overview";
+  const showHistory = compact || tab === "history";
+  const showBudget = !compact && tab === "budget";
+  const showSavings = !compact && tab === "savings";
+
   return (
-    <div className="cash-module">
-      <div className="cash-tabs" role="tablist">
-        {(
-          [
-            ["overview", "Umumiy"],
-            ["history", "Tarix"],
-            ["budget", "Byudjet"],
-            ["savings", "Jamg‘arma"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            role="tab"
-            className={`cash-tab${tab === id ? " on" : ""}`}
-            onClick={() => setTab(id)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+    <div className={`cash-module${compact ? " cash-compact" : ""}`}>
+      {showTabs ? (
+        <div className="cash-tabs" role="tablist">
+          {(
+            [
+              ["overview", "Umumiy"],
+              ["history", "Tarix"],
+              ["budget", "Byudjet"],
+              ["savings", "Jamg‘arma"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              className={`cash-tab${tab === id ? " on" : ""}`}
+              onClick={() => setTab(id)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       <div className="cash-month-row">
         <label>
@@ -188,13 +258,13 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
 
       {loading && !summary ? <p className="empty">Yuklanmoqda…</p> : null}
 
-      {tab === "overview" ? (
+      {showOverview ? (
         <>
           <div className="grid-3 cash-stats">
             <div className="card cash-stat">
               <h3>Balans</h3>
               <p className="stat-num tone-high">{money(summary?.balance ?? 0)}</p>
-              <p className="muted">so‘m</p>
+              <p className="muted">so‘m · jami (shaxsiy bilan)</p>
             </div>
             <div className="card cash-stat">
               <h3>Kirim (oy)</h3>
@@ -250,6 +320,9 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
                     </option>
                   ))}
                 </select>
+                <p className="muted" style={{ margin: "0.35rem 0 0", fontSize: "0.78rem" }}>
+                  Shaxsiy yozuvlar → Shaxsiy bo‘limi
+                </p>
               </div>
               <div className="field">
                 <label>Sana</label>
@@ -290,11 +363,11 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
                   ))}
                 </div>
               )}
-              {summary?.byCategory?.length ? (
+              {visibleByCategory.length ? (
                 <>
                   <h3 style={{ marginTop: "1rem" }}>Chiqim kategoriyalari</h3>
                   <ul className="cash-cat-list">
-                    {summary.byCategory.map((c) => (
+                    {visibleByCategory.map((c) => (
                       <li key={c.category}>
                         <span>{c.category}</span>
                         <strong>{money(c.amount)}</strong>
@@ -308,9 +381,50 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
         </>
       ) : null}
 
-      {tab === "history" ? (
+      {showHistory ? (
         <div className="card">
-          <h3>Tarix · {month}</h3>
+          <h3>
+            {listMode === "personal" ? "Shaxsiy tarix" : "Tarix"} · {month}
+          </h3>
+          {compact ? (
+            <form onSubmit={addTx} className="personal-cash-form">
+              <div className="composer-actions" style={{ marginBottom: "0.55rem" }}>
+                <button
+                  type="button"
+                  className={`btn ${kind === "expense" ? "btn-primary" : "btn-ghost"}`}
+                  onClick={() => setKind("expense")}
+                >
+                  Chiqim
+                </button>
+                <button
+                  type="button"
+                  className={`btn ${kind === "income" ? "btn-primary" : "btn-ghost"}`}
+                  onClick={() => setKind("income")}
+                >
+                  Kirim
+                </button>
+              </div>
+              <div className="filters journal-filters" style={{ marginBottom: "0.65rem" }}>
+                <input
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  placeholder="Summa"
+                  required
+                  aria-label="Summa"
+                />
+                <input
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Izoh"
+                  aria-label="Izoh"
+                />
+                <button className="btn btn-primary" type="submit">
+                  Qo‘shish
+                </button>
+              </div>
+            </form>
+          ) : null}
           <div className="filters journal-filters" style={{ marginBottom: "0.65rem" }}>
             <input
               value={historyQuery}
@@ -328,10 +442,14 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
               <option value="expense">Chiqim</option>
             </select>
           </div>
-          {txs.length === 0 ? (
+          {visibleTxs.length === 0 ? (
             <div className="empty-state">
               <strong>Tranzaksiyalar yo‘q</strong>
-              <p>Umumiy bo‘limdan kirim/chiqim qo‘shing.</p>
+              <p>
+                {listMode === "personal"
+                  ? "Shaxsiy kirim/chiqim qo‘shing."
+                  : "Umumiy bo‘limdan kirim/chiqim qo‘shing."}
+              </p>
             </div>
           ) : filteredTxs.length === 0 ? (
             <div className="empty-state compact">
@@ -343,16 +461,18 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
               {filteredTxs.map((t) => (
                 <li key={t.id} className={`cash-tx ${t.kind}`}>
                   <div>
-                    <strong>{t.category}</strong>
-                    <p className="muted">
+                    <strong className={maskSensitive ? "privacy-mask" : undefined}>
+                      {maskSensitive ? privacyText(t.category, true) : t.category}
+                    </strong>
+                    <p className={`muted${maskSensitive ? " privacy-mask" : ""}`}>
                       {t.occurredOn}
-                      {t.note ? ` · ${t.note}` : ""}
+                      {t.note ? ` · ${displayNote(t.note)}` : ""}
                     </p>
                   </div>
                   <div className="cash-tx-right">
-                    <span>
+                    <span className={maskSensitive ? "privacy-mask" : undefined}>
                       {t.kind === "income" ? "+" : "−"}
-                      {money(t.amount)}
+                      {displayAmount(t.amount)}
                     </span>
                     <button
                       className="icon-btn"
@@ -374,7 +494,7 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
         </div>
       ) : null}
 
-      {tab === "budget" ? (
+      {showBudget ? (
         <div className="grid-2 cash-grid">
           <form
             className="card"
@@ -429,13 +549,13 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
           </form>
           <div className="card">
             <h3>{month} limitlari</h3>
-            {budgets.length === 0 ? (
+            {visibleBudgets.length === 0 ? (
               <div className="empty-state">
                 <strong>Byudjet yo‘q</strong>
                 <p>Kategoriya bo‘yicha oylik limit qo‘ying.</p>
               </div>
             ) : (
-              budgets.map((b) => (
+              visibleBudgets.map((b) => (
                 <div key={b.id} className="budget-row">
                   <div className="budget-head">
                     <strong>{b.category}</strong>
@@ -457,7 +577,7 @@ export function CashControl({ onFlash }: { onFlash: (msg: string) => void }) {
         </div>
       ) : null}
 
-      {tab === "savings" ? (
+      {showSavings ? (
         <div className="grid-2 cash-grid">
           <form
             className="card"
