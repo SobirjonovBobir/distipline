@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { todayIso } from "@/lib/dates";
+import { formatAmountInput, parseAmountInput } from "@/lib/money-input";
 import { isPersonalCategoryName, PERSONAL_CATEGORY_NAME, privacyText } from "@/lib/personal";
 
 type CashCat = { id: string; name: string; color: string; kind: string };
@@ -202,7 +203,7 @@ export function CashControl({
       body: JSON.stringify({
         action: "transaction",
         kind,
-        amount: Number(amount),
+        amount: parseAmountInput(amount),
         category: cat,
         note,
         occurredOn: date,
@@ -216,6 +217,18 @@ export function CashControl({
     setNote("");
     onFlash(kind === "income" ? "Kirim qo‘shildi" : "Chiqim qo‘shildi");
     await load();
+  }
+
+  function onAmountChange(value: string) {
+    setAmount(formatAmountInput(value));
+  }
+
+  function onBudgetLimitChange(value: string) {
+    setBudgetLimit(formatAmountInput(value));
+  }
+
+  function onSavingTargetChange(value: string) {
+    setSavingTarget(formatAmountInput(value));
   }
 
   const showTabs = !compact;
@@ -302,9 +315,10 @@ export function CashControl({
                 <input
                   inputMode="decimal"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => onAmountChange(e.target.value)}
                   placeholder="0"
                   required
+                  autoComplete="off"
                 />
               </div>
               <div className="field">
@@ -408,10 +422,11 @@ export function CashControl({
                 <input
                   inputMode="decimal"
                   value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
+                  onChange={(e) => onAmountChange(e.target.value)}
                   placeholder="Summa"
                   required
                   aria-label="Summa"
+                  autoComplete="off"
                 />
                 <input
                   value={note}
@@ -507,7 +522,7 @@ export function CashControl({
                   action: "budget",
                   category: budgetCat,
                   monthKey: month,
-                  limitAmount: Number(budgetLimit),
+                  limitAmount: parseAmountInput(budgetLimit),
                 }),
               });
               if (!res.ok) {
@@ -539,8 +554,9 @@ export function CashControl({
               <input
                 inputMode="decimal"
                 value={budgetLimit}
-                onChange={(e) => setBudgetLimit(e.target.value)}
+                onChange={(e) => onBudgetLimitChange(e.target.value)}
                 required
+                autoComplete="off"
               />
             </div>
             <button className="btn btn-primary" type="submit">
@@ -589,7 +605,7 @@ export function CashControl({
                 body: JSON.stringify({
                   action: "saving",
                   title: savingTitle,
-                  targetAmount: Number(savingTarget),
+                  targetAmount: parseAmountInput(savingTarget),
                 }),
               });
               if (!res.ok) {
@@ -617,8 +633,9 @@ export function CashControl({
               <input
                 inputMode="decimal"
                 value={savingTarget}
-                onChange={(e) => setSavingTarget(e.target.value)}
+                onChange={(e) => onSavingTargetChange(e.target.value)}
                 required
+                autoComplete="off"
               />
             </div>
             <button className="btn btn-primary" type="submit">
@@ -649,7 +666,9 @@ export function CashControl({
                       className="btn btn-ghost"
                       type="button"
                       onClick={async () => {
-                        const add = Number(prompt("Qo‘shiladigan summa", "100000") || "0");
+                        const add = parseAmountInput(
+                          prompt("Qo‘shiladigan summa", "100 000") || "0",
+                        );
                         if (!add) return;
                         await fetch(`/api/cash/${s.id}`, {
                           method: "PATCH",
